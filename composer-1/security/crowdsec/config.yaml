@@ -1,0 +1,40 @@
+# Crowdsec Configuration
+
+common:
+  daemonize: true
+  pid_file: /var/run/crowdsec.pid
+  log_media: file
+  log_level: info
+  log_dir: /var/log/crowdsec
+  working_dir: /var/lib/crowdsec/data
+
+crowdsec_service:
+  acquisition_path: /etc/crowdsec/acquis.yaml
+  parser_path: /etc/crowdsec/parsers/
+  acquisition_dir: /etc/crowdsec/acquis.d/
+
+api:
+  client:
+    insecure_skip_verify: false
+    credentials_path: /etc/crowdsec/local_api_credentials.yaml
+  server:
+    listen_uri: 127.0.0.1:8080
+    profiles_path: /etc/crowdsec/profiles.yaml
+    online_client: # Crowdsec API
+      credentials_path: /etc/crowdsec/online_api_credentials.yaml
+
+db_config:
+  type: sqlite
+  db_path: /var/lib/crowdsec/data/crowdsec.db
+  flush:
+    max_items: 5000
+    max_age: 7d
+
+prometheus:
+  enabled: true
+  listen_addr: 127.0.0.1
+  listen_port: 6060
+
+plugin_dir: /usr/local/lib/crowdsec/plugins/
+
+

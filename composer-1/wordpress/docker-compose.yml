@@ -1,0 +1,97 @@
+# WordPress Deployment Example
+# This is a template for deploying WordPress sites
+# Customize per site or use as a base for multi-site deployments
+
+version: '3.8'
+
+services:
+  # WordPress Container
+  wordpress:
+    image: wordpress:php8.2-fpm  # Use custom image if available
+    environment:
+      WORDPRESS_DB_HOST: mariadb-master-1:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      WORDPRESS_DB_NAME: ${WP_DB_NAME:-wordpress}
+      WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX:-wp_}
+      WORDPRESS_DEBUG: ${WP_DEBUG:-0}
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
+      # Memcached Configuration
+      MEMCACHED_HOST: memcached
+      MEMCACHED_PORT: 11211
+      # PHP Configuration
+      PHP_MEMORY_LIMIT: 256M
+      PHP_MAX_EXECUTION_TIME: 300
+      PHP_UPLOAD_MAX_FILESIZE: 64M
+      PHP_POST_MAX_SIZE: 64M
+    volumes:
+      - wordpress-data:/var/www/html
+      - ./wp-config.php:/var/www/html/wp-config.php:ro
+      - ./wp-content:/var/www/html/wp-content
+      - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ./redis-cache.php:/var/www/html/wp-content/object-cache.php:ro
+    networks:
+      - wordpress
+      - caching
+      - database
+    deploy:
+      replicas: 2
+      placement:
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+      labels:
+        # Traefik Labels
+        - "traefik.enable=true"
+        - "traefik.http.routers.${SITE_NAME}.rule=Host(`${SITE_DOMAIN}`)"
+        - "traefik.http.routers.${SITE_NAME}.entrypoints=websecure"
+        - "traefik.http.routers.${SITE_NAME}.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.${SITE_NAME}.middlewares=security-chain,forward-auth"
+        - "traefik.http.services.${SITE_NAME}.loadbalancer.server.port=9000"
+        # Admin routes
+        - "traefik.http.routers.${SITE_NAME}-admin.rule=Host(`${SITE_DOMAIN}`) && PathPrefix(`/wp-admin`)"
+        - "traefik.http.routers.${SITE_NAME}-admin.entrypoints=websecure"
+        - "traefik.http.routers.${SITE_NAME}-admin.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.${SITE_NAME}-admin.middlewares=admin-chain"
+        - "traefik.http.services.${SITE_NAME}-admin.loadbalancer.server.port=9000"
+    healthcheck:
+      test: ["CMD", "php-fpm-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  wordpress:
+    external: true
+  caching:
+    external: true
+  database:
+    external: true
+
+volumes:
+  wordpress-data:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfs-server,nolock,soft,rw
+      device: ":/var/nfs/wordpress/${SITE_NAME}"
+
+

@@ -1,0 +1,194 @@
+# =============================================================================
+# TRAEFIK - Edge Router & Load Balancer
+# =============================================================================
+# Deployment: docker stack deploy -c traefik.yml traefik
+# =============================================================================
+
+version: "3.9"
+
+services:
+  traefik:
+    image: traefik:v3.2
+    hostname: "traefik-{{.Node.Hostname}}"
+    command:
+      # API & Dashboard
+      - "--api=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      
+      # Providers
+      - "--providers.swarm=true"
+      - "--providers.swarm.exposedByDefault=false"
+      - "--providers.swarm.network=traefik-public"
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      
+      # Entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
+      - "--entrypoints.websecure.http.tls.certResolver=letsencrypt"
+      
+      # Let's Encrypt
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-v02.api.letsencrypt.org/directory"
+      
+      # Logging
+      - "--log.level=INFO"
+      - "--log.format=json"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+      - "--accesslog.bufferingsize=100"
+      
+      # Metrics
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--metrics.prometheus.addEntryPointsLabels=true"
+      - "--metrics.prometheus.addServicesLabels=true"
+      - "--entrypoints.metrics.address=:8082"
+      - "--metrics.prometheus.entryPoint=metrics"
+      
+      # Tracing (OpenTelemetry)
+      - "--tracing.otlp=true"
+      - "--tracing.otlp.http.endpoint=http://alloy:4318/v1/traces"
+      
+      # Pilot (optional, for Traefik Hub)
+      # - "--pilot.token=${TRAEFIK_PILOT_TOKEN}"
+      
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-acme:/etc/traefik/acme
+      - traefik-logs:/var/log/traefik
+      - /var/opt/wordpress-farm/docker/configs/traefik/dynamic:/etc/traefik/dynamic:ro
+    
+    networks:
+      - traefik-public
+      - crowdsec-net
+      - observability-net
+    
+    environment:
+      - TZ=UTC
+    
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: stop-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 30s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+      labels:
+        # Enable Traefik for this service
+        - "traefik.enable=true"
+        
+        # Dashboard Router
+        - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`)"
+        - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+        - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.traefik-dashboard.service=api@internal"
+        - "traefik.http.routers.traefik-dashboard.middlewares=auth-admin,security-headers,crowdsec-bouncer"
+        
+        # Dummy service (required for swarm)
+        - "traefik.http.services.traefik-dashboard.loadbalancer.server.port=8080"
+        
+        # Auth Middleware (generate with: htpasswd -nb admin password | sed -e 's/\\$/\\$\\$/g')
+        - "traefik.http.middlewares.auth-admin.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
+        
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # CrowdSec Bouncer for Traefik
+  # ============================================
+  crowdsec-bouncer:
+    image: fbonalair/traefik-crowdsec-bouncer:latest
+    environment:
+      - CROWDSEC_BOUNCER_API_KEY=${CROWDSEC_BOUNCER_API_KEY}
+      - CROWDSEC_AGENT_HOST=crowdsec-lapi:8080
+      - GIN_MODE=release
+    networks:
+      - crowdsec-net
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 3
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.crowdsec-bouncer.loadbalancer.server.port=8080"
+        - "traefik.http.middlewares.crowdsec-bouncer.forwardauth.address=http://crowdsec-bouncer:8080/api/v1/forwardAuth"
+        - "traefik.http.middlewares.crowdsec-bouncer.forwardauth.trustForwardHeader=true"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/v1/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  traefik-acme:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/docker/configs/traefik/acme
+  traefik-logs:
+    driver: local
+
+networks:
+  traefik-public:
+    external: true
+  crowdsec-net:
+    external: true
+  observability-net:
+    external: true
+
+

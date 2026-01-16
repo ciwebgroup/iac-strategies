@@ -1,0 +1,367 @@
+version: '3.8'
+
+# Management Stack: Portainer, Backups, Registry
+
+services:
+  # Portainer - Container Management UI
+  portainer:
+    image: portainer/portainer-ee:latest
+    hostname: portainer
+    networks:
+      - management
+      - traefik-public
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer-data:/data
+    command: -H unix:///var/run/docker.sock
+    environment:
+      PORTAINER_ADMIN_PASSWORD_FILE: /run/secrets/portainer_admin_password
+    secrets:
+      - portainer_admin_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(`portainer.yourdomain.com`)"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+        # Optional: Add Cloudflare Access or BasicAuth
+        - "traefik.http.routers.portainer.middlewares=auth"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/api/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Portainer Agent on Worker Nodes
+  portainer-agent:
+    image: portainer/agent:latest
+    hostname: portainer-agent-{{.Node.Hostname}}
+    networks:
+      - management
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    environment:
+      AGENT_CLUSTER_ADDR: tasks.portainer-agent
+    deploy:
+      mode: global
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # Docker Registry - Private Image Registry
+  registry:
+    image: registry:2
+    hostname: registry
+    networks:
+      - management
+      - traefik-public
+    volumes:
+      - registry-data:/var/lib/registry
+      - ./registry/config.yml:/etc/docker/registry/config.yml:ro
+    environment:
+      REGISTRY_HTTP_SECRET: ${REGISTRY_SECRET}
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.registry.rule=Host(`registry.yourdomain.com`)"
+        - "traefik.http.routers.registry.entrypoints=websecure"
+        - "traefik.http.routers.registry.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.registry.middlewares=auth"
+        - "traefik.http.services.registry.loadbalancer.server.port=5000"
+
+  # Registry UI - Web interface for Docker Registry
+  registry-ui:
+    image: joxit/docker-registry-ui:latest
+    hostname: registry-ui
+    networks:
+      - management
+      - traefik-public
+    environment:
+      SINGLE_REGISTRY: "true"
+      REGISTRY_TITLE: "WordPress Farm Registry"
+      REGISTRY_URL: https://registry.yourdomain.com
+      DELETE_IMAGES: "true"
+      SHOW_CONTENT_DIGEST: "true"
+      NGINX_PROXY_PASS_URL: http://registry:5000
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.registry-ui.rule=Host(`registry-ui.yourdomain.com`)"
+        - "traefik.http.routers.registry-ui.entrypoints=websecure"
+        - "traefik.http.routers.registry-ui.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.registry-ui.middlewares=auth"
+        - "traefik.http.services.registry-ui.loadbalancer.server.port=80"
+
+  # File Backup Service - WordPress Uploads
+  restic-backup:
+    image: mazzolino/restic:latest
+    hostname: restic-backup
+    networks:
+      - management
+    volumes:
+      - /var/opt/nfs:/data:ro
+      - restic-cache:/cache
+      - ./backup-scripts:/scripts:ro
+    environment:
+      BACKUP_CRON: "0 3 * * *"  # Daily at 3 AM
+      RESTIC_REPOSITORY: s3:${DIGITALOCEAN_SPACES_ENDPOINT}/${BACKUP_BUCKET}/wordpress-files
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_key
+      RESTIC_BACKUP_SOURCES: /data
+      RESTIC_BACKUP_ARGS: >-
+        --verbose
+        --tag wordpress-uploads
+        --exclude-caches
+        --exclude '*.log'
+        --exclude '*.tmp'
+      RESTIC_FORGET_ARGS: >-
+        --keep-last 7
+        --keep-daily 7
+        --keep-weekly 4
+        --keep-monthly 12
+      TZ: America/New_York
+    secrets:
+      - restic_password
+      - s3_access_key
+      - s3_secret_key
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.storage == nfs
+      restart_policy:
+        condition: on-failure
+
+  # WatchTower - Automatic Container Updates
+  watchtower:
+    image: containrrr/watchtower:latest
+    hostname: watchtower-{{.Node.Hostname}}
+    networks:
+      - management
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_POLL_INTERVAL: 86400  # 24 hours
+      WATCHTOWER_ROLLING_RESTART: "true"
+      WATCHTOWER_NOTIFICATIONS: shoutrrr
+      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL}
+      WATCHTOWER_LABEL_ENABLE: "true"  # Only update containers with label
+      WATCHTOWER_SCHEDULE: "0 0 2 * * *"  # 2 AM daily
+    command: --interval 86400
+    deploy:
+      mode: global
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # Dozzle - Real-time Log Viewer
+  dozzle:
+    image: amir20/dozzle:latest
+    hostname: dozzle
+    networks:
+      - management
+      - traefik-public
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      DOZZLE_LEVEL: info
+      DOZZLE_TAILSIZE: 300
+      DOZZLE_FILTER: "status=running"
+      DOZZLE_NO_ANALYTICS: "true"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dozzle.rule=Host(`logs.yourdomain.com`)"
+        - "traefik.http.routers.dozzle.entrypoints=websecure"
+        - "traefik.http.routers.dozzle.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.dozzle.middlewares=auth"
+        - "traefik.http.services.dozzle.loadbalancer.server.port=8080"
+
+  # Shepherd - Alternative to Watchtower (more Docker Swarm aware)
+  shepherd:
+    image: mazzolino/shepherd:latest
+    hostname: shepherd
+    networks:
+      - management
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      SLEEP_TIME: "24h"
+      BLACKLIST_SERVICES: "shepherd management_shepherd"
+      WITH_REGISTRY_AUTH: "true"
+      WITH_INSECURE_REGISTRY: "false"
+      WITH_NO_RESOLVE_IMAGE: "false"
+      FILTER_SERVICES: "label=shepherd.enable=true"
+      APPRISE_SIDECAR_URL: "apprise:5000"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+
+  # Apprise - Notification Gateway
+  apprise:
+    image: caronc/apprise:latest
+    hostname: apprise
+    networks:
+      - management
+    environment:
+      APPRISE_STATELESS_URLS: ${APPRISE_URLS}
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.apprise.rule=Host(`apprise.yourdomain.com`)"
+        - "traefik.http.routers.apprise.entrypoints=websecure"
+        - "traefik.http.routers.apprise.middlewares=auth"
+        - "traefik.http.services.apprise.loadbalancer.server.port=8000"
+
+  # Swarmpit - Alternative Swarm Management UI (optional)
+  swarmpit:
+    image: swarmpit/swarmpit:latest
+    hostname: swarmpit
+    networks:
+      - management
+      - traefik-public
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - swarmpit-data:/data
+    environment:
+      SWARMPIT_DB: http://swarmpit-db:5984
+      SWARMPIT_INFLUXDB: http://swarmpit-influxdb:8086
+    deploy:
+      mode: replicated
+      replicas: 0  # Enable if preferred over Portainer
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.swarmpit.rule=Host(`swarmpit.yourdomain.com`)"
+        - "traefik.http.routers.swarmpit.entrypoints=websecure"
+        - "traefik.http.routers.swarmpit.middlewares=auth"
+        - "traefik.http.services.swarmpit.loadbalancer.server.port=8080"
+
+  swarmpit-db:
+    image: couchdb:2.3
+    hostname: swarmpit-db
+    networks:
+      - management
+    volumes:
+      - swarmpit-db-data:/opt/couchdb/data
+    environment:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD_FILE: /run/secrets/swarmpit_db_password
+    secrets:
+      - swarmpit_db_password
+    deploy:
+      mode: replicated
+      replicas: 0
+      placement:
+        constraints:
+          - node.role == manager
+
+  swarmpit-influxdb:
+    image: influxdb:1.8
+    hostname: swarmpit-influxdb
+    networks:
+      - management
+    volumes:
+      - swarmpit-influxdb-data:/var/lib/influxdb
+    deploy:
+      mode: replicated
+      replicas: 0
+      placement:
+        constraints:
+          - node.role == manager
+
+volumes:
+  portainer-data:
+    driver: local
+  registry-data:
+    driver: local
+  restic-cache:
+    driver: local
+  swarmpit-data:
+    driver: local
+  swarmpit-db-data:
+    driver: local
+  swarmpit-influxdb-data:
+    driver: local
+
+networks:
+  management:
+    external: true
+  traefik-public:
+    external: true
+
+secrets:
+  portainer_admin_password:
+    external: true
+  restic_password:
+    external: true
+  s3_access_key:
+    external: true
+  s3_secret_key:
+    external: true
+  swarmpit_db_password:
+    external: true
+
+

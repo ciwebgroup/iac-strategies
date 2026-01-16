@@ -1,0 +1,421 @@
+# =============================================================================
+# BACKUP STACK - Comprehensive Database & File Backups
+# =============================================================================
+# Daily backups with smart retention:
+# - 2 weeks: ALL daily backups
+# - 6 months: Weekly backups (Sundays only)
+# - 6+ months: Monthly backups (1st of month only)
+#
+# Deployment: docker stack deploy -c backup-stack.yml backup
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # DATABASE BACKUP - Per-Database SQL Dumps
+  # ============================================
+  database-backup:
+    image: alpine:latest
+    hostname: database-backup
+    networks:
+      - database-net
+      - management-net
+    volumes:
+      - backup-database:/backups
+      - /var/opt/wordpress-farm/scripts/backup:/scripts:ro
+    environment:
+      # Backup schedule
+      BACKUP_TIME: "02:00"
+      BACKUP_ENABLED: "true"
+      
+      # Database connection
+      MYSQL_HOST: proxysql
+      MYSQL_PORT: 6033
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      
+      # S3 / DO Spaces configuration
+      S3_ENDPOINT: ${DO_SPACES_ENDPOINT}
+      S3_BUCKET: ${DO_SPACES_BUCKET}
+      S3_ACCESS_KEY: ${DO_SPACES_ACCESS_KEY}
+      S3_SECRET_KEY: ${DO_SPACES_SECRET_KEY}
+      S3_PREFIX: database-backups
+      
+      # Retention policy
+      KEEP_DAILY_DAYS: 14           # Keep all dailies for 2 weeks
+      KEEP_WEEKLY_WEEKS: 26         # Keep Sundays for 6 months
+      KEEP_MONTHLY_MONTHS: 12       # Keep 1st of month for 12 months
+      
+      # Compression & encryption
+      COMPRESSION: "gzip"
+      ENCRYPTION_ENABLED: "true"
+      GPG_RECIPIENT: ${BACKUP_GPG_KEY_ID}
+      
+      # Notification
+      NOTIFICATION_URL: ${SLACK_WEBHOOK_URL}
+      NOTIFICATION_CHANNEL: "#backup-notifications"
+    
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        # Install required packages
+        apk add --no-cache mysql-client gzip aws-cli gnupg coreutils curl
+        
+        # Execute backup script
+        exec /scripts/backup-databases.sh
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+        delay: 60s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "prometheus.scrape=false"
+    
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/backup-healthy"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================
+  # WORDPRESS FILE BACKUP - Per-Site Backups
+  # ============================================
+  wordpress-file-backup:
+    image: alpine:latest
+    hostname: wordpress-file-backup
+    networks:
+      - storage-net
+      - management-net
+    volumes:
+      - /mnt/glusterfs:/wordpress-data:ro
+      - backup-wordpress:/backups
+      - /var/opt/wordpress-farm/scripts/backup:/scripts:ro
+    environment:
+      # Backup schedule
+      BACKUP_TIME: "03:00"
+      BACKUP_ENABLED: "true"
+      
+      # Source directories
+      WORDPRESS_DATA_PATH: /wordpress-data
+      
+      # S3 / DO Spaces configuration
+      S3_ENDPOINT: ${DO_SPACES_ENDPOINT}
+      S3_BUCKET: ${DO_SPACES_BUCKET}
+      S3_ACCESS_KEY: ${DO_SPACES_ACCESS_KEY}
+      S3_SECRET_KEY: ${DO_SPACES_SECRET_KEY}
+      S3_PREFIX: wordpress-files
+      
+      # Retention policy (same as database)
+      KEEP_DAILY_DAYS: 14
+      KEEP_WEEKLY_WEEKS: 26
+      KEEP_MONTHLY_MONTHS: 12
+      
+      # Compression & encryption
+      COMPRESSION: "gzip"
+      ENCRYPTION_ENABLED: "true"
+      GPG_RECIPIENT: ${BACKUP_GPG_KEY_ID}
+      
+      # Notification
+      NOTIFICATION_URL: ${SLACK_WEBHOOK_URL}
+      NOTIFICATION_CHANNEL: "#backup-notifications"
+      
+      # Backup options
+      INCREMENTAL_ENABLED: "false"  # Full backups only
+      PARALLEL_JOBS: 4               # Backup 4 sites in parallel
+    
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        # Install required packages
+        apk add --no-cache tar gzip aws-cli gnupg coreutils curl rsync
+        
+        # Execute backup script
+        exec /scripts/backup-wordpress-files.sh
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.storage == true
+      restart_policy:
+        condition: on-failure
+        delay: 60s
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "prometheus.scrape=false"
+    
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/backup-healthy"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================
+  # BACKUP CLEANUP - Smart Retention Management
+  # ============================================
+  backup-cleanup:
+    image: alpine:latest
+    hostname: backup-cleanup
+    networks:
+      - management-net
+    volumes:
+      - /var/opt/wordpress-farm/scripts/backup:/scripts:ro
+    environment:
+      # Cleanup schedule (runs daily at 4 AM, after backups complete)
+      CLEANUP_TIME: "04:00"
+      CLEANUP_ENABLED: "true"
+      
+      # S3 configuration
+      S3_ENDPOINT: ${DO_SPACES_ENDPOINT}
+      S3_BUCKET: ${DO_SPACES_BUCKET}
+      S3_ACCESS_KEY: ${DO_SPACES_ACCESS_KEY}
+      S3_SECRET_KEY: ${DO_SPACES_SECRET_KEY}
+      
+      # Retention policy
+      # Keep ALL backups for 14 days
+      KEEP_ALL_DAYS: 14
+      
+      # For backups 15-180 days old: Keep only Sunday backups
+      KEEP_WEEKLY_START_DAY: 15
+      KEEP_WEEKLY_END_DAY: 180
+      KEEP_WEEKLY_DAY: sunday
+      
+      # For backups 181+ days old: Keep only 1st of month backups
+      KEEP_MONTHLY_START_DAY: 181
+      KEEP_MONTHLY_END_DAY: 365
+      KEEP_MONTHLY_DAY: 1
+      
+      # Delete backups older than this
+      MAX_AGE_DAYS: 365
+      
+      # Notification
+      NOTIFICATION_URL: ${SLACK_WEBHOOK_URL}
+      NOTIFICATION_CHANNEL: "#backup-notifications"
+      
+      # Dry run mode (set to false for actual deletion)
+      DRY_RUN: "false"
+    
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        # Install required packages
+        apk add --no-cache aws-cli coreutils curl jq
+        
+        # Execute cleanup script
+        exec /scripts/backup-cleanup.sh
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+        delay: 60s
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      labels:
+        - "prometheus.scrape=false"
+    
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/cleanup-healthy"]
+      interval: 3600s
+      timeout: 30s
+      retries: 3
+
+  # ============================================
+  # BACKUP MONITOR - Track Backup Success/Failures
+  # ============================================
+  backup-monitor:
+    image: alpine:latest
+    hostname: backup-monitor
+    networks:
+      - management-net
+      - observability-net
+    volumes:
+      - /var/opt/wordpress-farm/scripts/backup:/scripts:ro
+    environment:
+      # Monitoring configuration
+      CHECK_INTERVAL: 300  # Check every 5 minutes
+      
+      # S3 configuration
+      S3_ENDPOINT: ${DO_SPACES_ENDPOINT}
+      S3_BUCKET: ${DO_SPACES_BUCKET}
+      S3_ACCESS_KEY: ${DO_SPACES_ACCESS_KEY}
+      S3_SECRET_KEY: ${DO_SPACES_SECRET_KEY}
+      
+      # Alert thresholds
+      BACKUP_MAX_AGE_HOURS: 26      # Alert if no backup in 26 hours
+      BACKUP_MIN_SIZE_MB: 10         # Alert if backup too small
+      
+      # Notification
+      NOTIFICATION_URL: ${SLACK_WEBHOOK_URL}
+      ALERTMANAGER_URL: http://alertmanager:9093
+      
+      # Prometheus pushgateway
+      PUSHGATEWAY_URL: http://prometheus-pushgateway:9091
+    
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        # Install required packages
+        apk add --no-cache aws-cli coreutils curl jq
+        
+        # Execute monitor script
+        exec /scripts/backup-monitor.sh
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "prometheus.scrape=false"
+
+  # ============================================
+  # PROMETHEUS PUSHGATEWAY - For Backup Metrics
+  # ============================================
+  prometheus-pushgateway:
+    image: prom/pushgateway:latest
+    hostname: pushgateway
+    networks:
+      - observability-net
+    command:
+      - '--web.listen-address=:9091'
+      - '--persistence.file=/data/pushgateway.data'
+      - '--persistence.interval=5m'
+    volumes:
+      - pushgateway-data:/data
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+      labels:
+        - "prometheus.scrape=true"
+        - "prometheus.port=9091"
+        - "prometheus.path=/metrics"
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  backup-database:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/backups/database
+  
+  backup-wordpress:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/backups/wordpress
+  
+  pushgateway-data:
+    driver: local
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  database-net:
+    external: true
+    name: database-net
+  
+  storage-net:
+    external: true
+    name: storage-net
+  
+  management-net:
+    external: true
+    name: management-net
+  
+  observability-net:
+    external: true
+    name: observability-net
+
+# =============================================================================
+# DEPLOYMENT NOTES
+# =============================================================================
+#
+# Prerequisites:
+# 1. Create backup directories on monitor nodes:
+#    mkdir -p /var/opt/backups/{database,wordpress}
+#    chmod 700 /var/opt/backups
+#
+# 2. Create backup scripts (see scripts/backup/ directory)
+#
+# 3. Configure DO Spaces bucket and credentials in .env
+#
+# 4. Generate GPG key for backup encryption:
+#    gpg --gen-key
+#    gpg --list-keys (note the key ID)
+#
+# 5. Deploy:
+#    docker stack deploy -c backup-stack.yml backup
+#
+# Retention Logic:
+# - Days 1-14: Keep ALL backups (daily)
+# - Days 15-180: Keep SUNDAY backups only (weekly)
+# - Days 181-365: Keep 1st of MONTH backups only (monthly)
+# - Days 365+: DELETE
+#
+# Result:
+# - 14 daily backups (last 2 weeks)
+# - 26 weekly backups (6 months of Sundays)
+# - 12 monthly backups (12 months of 1st)
+# - Total: ~52 backups per site/database
+#
+# =============================================================================
+

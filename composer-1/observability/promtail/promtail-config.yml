@@ -1,0 +1,67 @@
+# Promtail Configuration
+# Ships logs to Loki
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Docker containers
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'logstream'
+      - source_labels: ['__meta_docker_container_label_com_docker_swarm_service_name']
+        target_label: 'service'
+      - source_labels: ['__meta_docker_container_label_com_docker_swarm_task_name']
+        target_label: 'task'
+
+  # System logs
+  - job_name: syslog
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: syslog
+          __path__: /var/log/syslog
+
+  # Traefik logs
+  - job_name: traefik
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: traefik
+          __path__: /var/log/traefik/*.log
+
+  # WordPress logs
+  - job_name: wordpress
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: wordpress
+          __path__: /var/log/wordpress/*.log
+
+  # Database logs
+  - job_name: mariadb
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: mariadb
+          __path__: /var/log/mysql/*.log
+
+

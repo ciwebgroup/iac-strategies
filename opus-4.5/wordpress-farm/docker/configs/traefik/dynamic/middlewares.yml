@@ -1,0 +1,235 @@
+# =============================================================================
+# TRAEFIK DYNAMIC CONFIGURATION - Middlewares
+# =============================================================================
+
+http:
+  middlewares:
+    # =========================================================================
+    # SECURITY HEADERS
+    # =========================================================================
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        customFrameOptionsValue: "SAMEORIGIN"
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=()"
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow, nosnippet, noarchive"
+          X-Download-Options: "noopen"
+          X-Permitted-Cross-Domain-Policies: "none"
+          server: ""
+
+    # =========================================================================
+    # CLOUDFLARE IP WHITELIST
+    # =========================================================================
+    cloudflare-only:
+      ipWhiteList:
+        sourceRange:
+          # Cloudflare IPv4
+          - "173.245.48.0/20"
+          - "103.21.244.0/22"
+          - "103.22.200.0/22"
+          - "103.31.4.0/22"
+          - "141.101.64.0/18"
+          - "108.162.192.0/18"
+          - "190.93.240.0/20"
+          - "188.114.96.0/20"
+          - "197.234.240.0/22"
+          - "198.41.128.0/17"
+          - "162.158.0.0/15"
+          - "104.16.0.0/13"
+          - "104.24.0.0/14"
+          - "172.64.0.0/13"
+          - "131.0.72.0/22"
+          # Cloudflare IPv6
+          - "2400:cb00::/32"
+          - "2606:4700::/32"
+          - "2803:f800::/32"
+          - "2405:b500::/32"
+          - "2405:8100::/32"
+          - "2a06:98c0::/29"
+          - "2c0f:f248::/32"
+          # Internal networks (for health checks)
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+        ipStrategy:
+          depth: 0
+
+    # =========================================================================
+    # RATE LIMITING - General
+    # =========================================================================
+    rate-limit-general:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
+        sourceCriterion:
+          requestHeaderName: "CF-Connecting-IP"
+
+    # =========================================================================
+    # RATE LIMITING - Admin Pages
+    # =========================================================================
+    rate-limit-admin:
+      rateLimit:
+        average: 10
+        burst: 20
+        period: 1s
+        sourceCriterion:
+          requestHeaderName: "CF-Connecting-IP"
+
+    # =========================================================================
+    # RATE LIMITING - Login
+    # =========================================================================
+    rate-limit-login:
+      rateLimit:
+        average: 5
+        burst: 10
+        period: 1m
+        sourceCriterion:
+          requestHeaderName: "CF-Connecting-IP"
+
+    # =========================================================================
+    # COMPRESSION
+    # =========================================================================
+    compress:
+      compress:
+        excludedContentTypes:
+          - "text/event-stream"
+
+    # =========================================================================
+    # RETRY ON FAILURE
+    # =========================================================================
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    # =========================================================================
+    # CIRCUIT BREAKER
+    # =========================================================================
+    circuit-breaker:
+      circuitBreaker:
+        expression: "NetworkErrorRatio() > 0.5 || ResponseCodeRatio(500, 600, 0, 600) > 0.5"
+        checkPeriod: 10s
+        fallbackDuration: 30s
+        recoveryDuration: 60s
+
+    # =========================================================================
+    # BUFFERING
+    # =========================================================================
+    buffering:
+      buffering:
+        maxRequestBodyBytes: 67108864  # 64MB
+        memRequestBodyBytes: 2097152   # 2MB
+        maxResponseBodyBytes: 67108864
+        memResponseBodyBytes: 2097152
+        retryExpression: "IsNetworkError() && Attempts() < 2"
+
+    # =========================================================================
+    # GZIP COMPRESSION (if not using Cloudflare compression)
+    # =========================================================================
+    gzip:
+      compress:
+        excludedContentTypes:
+          - "text/event-stream"
+          - "image/jpeg"
+          - "image/png"
+          - "image/gif"
+          - "image/webp"
+
+    # =========================================================================
+    # STRIP WWW PREFIX
+    # =========================================================================
+    strip-www:
+      redirectRegex:
+        regex: "^https://www\\.(.*)"
+        replacement: "https://${1}"
+        permanent: true
+
+    # =========================================================================
+    # ADD WWW PREFIX (alternative)
+    # =========================================================================
+    add-www:
+      redirectRegex:
+        regex: "^https://(?!www\\.)(.*)"
+        replacement: "https://www.${1}"
+        permanent: true
+
+    # =========================================================================
+    # FORCE HTTPS
+    # =========================================================================
+    https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # =========================================================================
+    # BASIC AUTH (for admin areas)
+    # =========================================================================
+    # Generate with: htpasswd -nb admin password | sed -e 's/\$/\$\$/g'
+    auth-admin:
+      basicAuth:
+        users:
+          - "${TRAEFIK_DASHBOARD_AUTH}"
+        realm: "Admin Area"
+        removeHeader: true
+
+    # =========================================================================
+    # IP WHITELIST - Internal Only
+    # =========================================================================
+    internal-only:
+      ipWhiteList:
+        sourceRange:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+          - "127.0.0.1/32"
+
+    # =========================================================================
+    # ERROR PAGES
+    # =========================================================================
+    error-pages:
+      errors:
+        status:
+          - "500-599"
+        service: error-page@docker
+        query: "/{status}.html"
+
+    # =========================================================================
+    # REQUEST SIZE LIMIT
+    # =========================================================================
+    request-size:
+      buffering:
+        maxRequestBodyBytes: 67108864  # 64MB for file uploads
+
+    # =========================================================================
+    # CHAIN - WordPress Standard
+    # =========================================================================
+    wordpress-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - cloudflare-only
+          - crowdsec-bouncer
+          - rate-limit-general
+          - compress
+
+    # =========================================================================
+    # CHAIN - WordPress Admin
+    # =========================================================================
+    wordpress-admin-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - cloudflare-only
+          - crowdsec-bouncer
+          - rate-limit-admin
+          - compress
+
+

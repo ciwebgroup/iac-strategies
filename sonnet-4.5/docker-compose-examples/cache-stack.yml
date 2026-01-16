@@ -1,0 +1,428 @@
+# =============================================================================
+# CACHE LAYER - Varnish + Redis (Opus 4.5 Style - Dedicated Cache Tier)
+# =============================================================================
+# This is the Opus 4.5 architecture: dedicated cache nodes separate from managers
+# Deployment: docker stack deploy -c cache-stack.yml cache
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # VARNISH - Full Page HTTP Cache
+  # ============================================
+  varnish:
+    image: varnish:7.4-alpine
+    hostname: "varnish-{{.Task.Slot}}"
+    command:
+      - "-a"
+      - ":6081"
+      - "-T"
+      - ":6082"
+      - "-f"
+      - "/etc/varnish/default.vcl"
+      - "-s"
+      - "malloc,${VARNISH_MEMORY:-4G}"
+      - "-p"
+      - "thread_pool_min=50"
+      - "-p"
+      - "thread_pool_max=1000"
+      - "-p"
+      - "thread_pool_timeout=120"
+      - "-p"
+      - "http_resp_hdr_len=32768"
+      - "-p"
+      - "http_resp_size=98304"
+      - "-p"
+      - "workspace_backend=131072"
+    
+    volumes:
+      - /var/opt/wordpress-farm/configs/varnish/default.vcl:/etc/varnish/default.vcl:ro
+      - /var/opt/wordpress-farm/configs/varnish/secret:/etc/varnish/secret:ro
+    
+    networks:
+      - traefik-public
+      - cache-net
+      - wordpress-net
+      - observability-net
+    
+    environment:
+      - VARNISH_SIZE=${VARNISH_MEMORY:-2G}
+      - VARNISH_TTL=${VARNISH_DEFAULT_TTL:-3600}
+    
+    deploy:
+      mode: replicated
+      replicas: 3
+      placement:
+        constraints:
+          - node.labels.cache == true
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 60s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4096M
+        reservations:
+          cpus: '0.5'
+          memory: 2048M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.varnish.rule=HostRegexp(`{host:.+}`)"
+        - "traefik.http.routers.varnish.priority=1"
+        - "traefik.http.routers.varnish.entrypoints=websecure"
+        - "traefik.http.routers.varnish.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.varnish.middlewares=security-headers,cloudflare-only,crowdsec-bouncer"
+        - "traefik.http.services.varnish.loadbalancer.server.port=6081"
+        - "traefik.http.services.varnish.loadbalancer.healthcheck.path=/health"
+        - "traefik.http.services.varnish.loadbalancer.healthcheck.interval=10s"
+        - "traefik.http.services.varnish.loadbalancer.healthcheck.timeout=5s"
+        - "traefik.http.services.varnish.loadbalancer.sticky.cookie.name=varnish_backend"
+        - "traefik.http.services.varnish.loadbalancer.sticky.cookie.secure=true"
+        - "traefik.docker.network=traefik-public"
+        # Prometheus metrics
+        - "prometheus.scrape=true"
+        - "prometheus.port=9131"
+        - "prometheus.path=/metrics"
+    
+    healthcheck:
+      test: ["CMD", "varnishadm", "-S", "/etc/varnish/secret", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================
+  # VARNISH EXPORTER - Prometheus Metrics
+  # ============================================
+  varnish-exporter:
+    image: prom/varnish-exporter:latest
+    hostname: "varnish-exporter-{{.Task.Slot}}"
+    command:
+      - "--varnish.instance=varnish:6082"
+      - "--web.listen-address=:9131"
+      - "--web.telemetry-path=/metrics"
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.labels.cache == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=9131"
+
+  # ============================================
+  # REDIS - Object Cache (Master)
+  # ============================================
+  redis-master:
+    image: redis:7-alpine
+    hostname: redis-master
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - "${REDIS_PASSWORD}"
+      - --masterauth
+      - "${REDIS_PASSWORD}"
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "2gb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+      - --save
+      - "900 1"
+      - --save
+      - "300 10"
+      - --save
+      - "60 10000"
+    
+    volumes:
+      - redis-master-data:/data
+      - /var/opt/wordpress-farm/configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.cache == true
+          - node.labels.cache-node == 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2560M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=9121"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # REDIS - Object Cache (Replicas)
+  # ============================================
+  redis-replica:
+    image: redis:7-alpine
+    hostname: "redis-replica-{{.Task.Slot}}"
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - "${REDIS_PASSWORD}"
+      - --masterauth
+      - "${REDIS_PASSWORD}"
+      - --replicaof
+      - redis-master
+      - "6379"
+      - --replica-read-only
+      - "yes"
+      - --maxmemory
+      - "2gb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+    
+    volumes:
+      - /var/opt/wordpress-farm/configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    depends_on:
+      - redis-master
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.cache == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 2560M
+        reservations:
+          cpus: '0.1'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # REDIS SENTINEL - High Availability Manager
+  # ============================================
+  redis-sentinel:
+    image: redis:7-alpine
+    hostname: "redis-sentinel-{{.Task.Slot}}"
+    command:
+      - redis-sentinel
+      - /etc/redis/sentinel.conf
+      - --sentinel
+    
+    configs:
+      - source: redis_sentinel_config
+        target: /etc/redis/sentinel.conf
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    depends_on:
+      - redis-master
+    
+    deploy:
+      mode: replicated
+      replicas: 3
+      placement:
+        constraints:
+          - node.labels.cache == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # REDIS EXPORTER - Prometheus Metrics
+  # ============================================
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    hostname: "redis-exporter-{{.Task.Slot}}"
+    environment:
+      - REDIS_ADDR=redis://redis-master:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_EXPORTER_CHECK_KEYS=*
+      - REDIS_EXPORTER_CHECK_SINGLE_KEYS=*
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.cache == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=9121"
+        - "prometheus.path=/metrics"
+
+# =============================================================================
+# CONFIG FILES
+# =============================================================================
+configs:
+  redis_sentinel_config:
+    file: /var/opt/wordpress-farm/configs/redis/sentinel.conf
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  redis-master-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/data/redis-master
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik-public:
+    external: true
+    name: traefik-public
+  
+  cache-net:
+    external: true
+    name: cache-net
+  
+  wordpress-net:
+    external: true
+    name: wordpress-net
+  
+  observability-net:
+    external: true
+    name: observability-net
+
+# =============================================================================
+# DEPLOYMENT NOTES
+# =============================================================================
+#
+# Prerequisites:
+# 1. Label cache nodes:
+#    docker node update --label-add cache=true node-name
+#    docker node update --label-add cache-node=1 cache-node-1
+#    docker node update --label-add cache-node=2 cache-node-2
+#    docker node update --label-add cache-node=3 cache-node-3
+#
+# 2. Create networks (if not exists):
+#    docker network create --driver overlay --attachable traefik-public
+#    docker network create --driver overlay --attachable cache-net
+#    docker network create --driver overlay --attachable wordpress-net
+#    docker network create --driver overlay --attachable observability-net
+#
+# 3. Create config directories:
+#    mkdir -p /var/opt/wordpress-farm/configs/{varnish,redis}
+#    mkdir -p /var/opt/wordpress-farm/data/redis-master
+#
+# 4. Deploy:
+#    docker stack deploy -c cache-stack.yml cache
+#
+# 5. Verify:
+#    docker service ls | grep cache
+#    docker service logs cache_varnish
+#    docker service logs cache_redis-master
+#
+# Health Checks:
+# - Varnish: curl -H "Host: test.local" http://varnish-node:6081/health
+# - Redis: redis-cli -h redis-master -a $REDIS_PASSWORD ping
+# - Sentinel: redis-cli -h redis-sentinel -p 26379 sentinel master mymaster
+#
+# =============================================================================
+

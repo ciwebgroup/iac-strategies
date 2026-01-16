@@ -1,0 +1,233 @@
+# =============================================================================
+# MANAGEMENT LAYER - Portainer + Backup Services
+# =============================================================================
+# Deployment: docker stack deploy -c management.yml management
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # PORTAINER - Container Management UI
+  # ============================================
+  portainer:
+    image: portainer/portainer-ce:2.21.3
+    hostname: portainer
+    command: -H tcp://tasks.portainer-agent:9001 --tlsskipverify
+    
+    volumes:
+      - portainer-data:/data
+    
+    networks:
+      - portainer-net
+      - traefik-public
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.portainer.middlewares=security-headers,crowdsec-bouncer"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # PORTAINER AGENT - Runs on all nodes
+  # ============================================
+  portainer-agent:
+    image: portainer/agent:2.21.3
+    hostname: "portainer-agent-{{.Node.Hostname}}"
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    
+    networks:
+      - portainer-net
+    
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+      labels:
+        - "traefik.enable=false"
+
+  # ============================================
+  # BACKUP SERVICE - Database Backups
+  # ============================================
+  backup-db:
+    image: ${DOCKER_REGISTRY}/backup:latest
+    hostname: backup-db
+    
+    environment:
+      - BACKUP_TYPE=database
+      - BACKUP_SCHEDULE=0 */6 * * *
+      - BACKUP_RETENTION_DAYS=30
+      - DB_HOST=proxysql
+      - DB_PORT=6033
+      - DB_USER=${MARIADB_BACKUP_USER}
+      - DB_PASSWORD=${MARIADB_BACKUP_PASSWORD}
+      - S3_ENDPOINT=https://${DO_SPACES_REGION}.digitaloceanspaces.com
+      - S3_BUCKET=${DO_SPACES_BUCKET}
+      - S3_ACCESS_KEY=${DO_SPACES_ACCESS_KEY}
+      - S3_SECRET_KEY=${DO_SPACES_SECRET_KEY}
+      - S3_PREFIX=backups/database
+      - ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY}
+      - SLACK_WEBHOOK=${SLACK_WEBHOOK_URL}
+    
+    volumes:
+      - backup-db-cache:/var/cache/backup
+    
+    networks:
+      - database-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "traefik.enable=false"
+
+  # ============================================
+  # BACKUP SERVICE - File Backups
+  # ============================================
+  backup-files:
+    image: ${DOCKER_REGISTRY}/backup:latest
+    hostname: backup-files
+    
+    environment:
+      - BACKUP_TYPE=files
+      - BACKUP_SCHEDULE=0 2 * * *
+      - BACKUP_RETENTION_DAYS=30
+      - BACKUP_SOURCE=/data/sites
+      - S3_ENDPOINT=https://${DO_SPACES_REGION}.digitaloceanspaces.com
+      - S3_BUCKET=${DO_SPACES_BUCKET}
+      - S3_ACCESS_KEY=${DO_SPACES_ACCESS_KEY}
+      - S3_SECRET_KEY=${DO_SPACES_SECRET_KEY}
+      - S3_PREFIX=backups/files
+      - ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY}
+      - SLACK_WEBHOOK=${SLACK_WEBHOOK_URL}
+    
+    volumes:
+      - /var/opt/wordpress-farm/sites:/data/sites:ro
+      - backup-files-cache:/var/cache/backup
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+
+  # ============================================
+  # WP-CLI FARM - WordPress Management
+  # ============================================
+  wp-cli:
+    image: ${DOCKER_REGISTRY}/wordpress-farm:latest
+    hostname: wp-cli
+    
+    entrypoint: /bin/sh
+    command: -c "while true; do sleep 86400; done"
+    
+    environment:
+      - WORDPRESS_DB_HOST=proxysql:6033
+    
+    volumes:
+      - /var/opt/wordpress-farm/sites:/var/www/sites
+      - /var/opt/wordpress-farm/scripts:/scripts:ro
+    
+    networks:
+      - wordpress-net
+      - database-net
+      - cache-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+
+volumes:
+  portainer-data:
+    driver: local
+  backup-db-cache:
+    driver: local
+  backup-files-cache:
+    driver: local
+
+networks:
+  portainer-net:
+    driver: overlay
+    attachable: true
+  traefik-public:
+    external: true
+  database-net:
+    external: true
+  wordpress-net:
+    external: true
+  cache-net:
+    external: true
+  observability-net:
+    external: true
+
+

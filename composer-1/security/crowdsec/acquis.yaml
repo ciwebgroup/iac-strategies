@@ -1,0 +1,17 @@
+# Crowdsec Acquisition Configuration
+# Defines log sources to monitor
+
+filenames:
+  - /var/log/traefik/access.log
+  - /var/log/traefik/traefik.log
+  - /var/log/nginx/access.log
+  - /var/log/nginx/error.log
+  - /var/log/apache2/access.log
+  - /var/log/apache2/error.log
+  - /var/log/mysql/error.log
+  - /var/log/auth.log
+
+labels:
+  type: syslog
+
+

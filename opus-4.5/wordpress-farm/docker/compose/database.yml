@@ -1,0 +1,337 @@
+# =============================================================================
+# DATABASE LAYER - MariaDB Galera Cluster + ProxySQL
+# =============================================================================
+# Deployment: docker stack deploy -c database.yml database
+# 
+# IMPORTANT: Initial bootstrap requires manual intervention
+# See: scripts/galera-bootstrap.sh
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # MARIADB GALERA - Node 1 (Bootstrap Node)
+  # ============================================
+  mariadb-1:
+    image: mariadb:11.2
+    hostname: mariadb-1
+    command:
+      - --wsrep-on=ON
+      - --wsrep-provider=/usr/lib/galera/libgalera_smm.so
+      - --wsrep-cluster-name=wp_galera_cluster
+      - --wsrep-cluster-address=gcomm://mariadb-1,mariadb-2,mariadb-3
+      - --wsrep-node-name=mariadb-1
+      - --wsrep-node-address=mariadb-1
+      - --wsrep-sst-method=mariabackup
+      - --wsrep-sst-auth=${MARIADB_SST_USER}:${MARIADB_SST_PASSWORD}
+      - --binlog-format=ROW
+      - --default-storage-engine=InnoDB
+      - --innodb-autoinc-lock-mode=2
+      - --innodb-buffer-pool-size=4G
+      - --innodb-log-file-size=512M
+      - --innodb-flush-log-at-trx-commit=2
+      - --innodb-flush-method=O_DIRECT
+      - --max-connections=2000
+      - --thread-cache-size=100
+      - --query-cache-type=0
+      - --performance-schema=ON
+      - --slow-query-log=ON
+      - --slow-query-log-file=/var/log/mysql/slow.log
+      - --long-query-time=2
+    
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=wordpress
+      - MARIADB_USER=${MARIADB_USER}
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD}
+      - TZ=UTC
+    
+    volumes:
+      - mariadb-1-data:/var/lib/mysql
+      - mariadb-logs-1:/var/log/mysql
+      - /var/opt/wordpress-farm/docker/configs/mariadb/galera.cnf:/etc/mysql/conf.d/galera.cnf:ro
+      - /var/opt/wordpress-farm/docker/configs/mariadb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    
+    networks:
+      - database-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.db == true
+          - node.labels.db-node == 1
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8192M
+        reservations:
+          cpus: '1.0'
+          memory: 4096M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ============================================
+  # MARIADB GALERA - Node 2
+  # ============================================
+  mariadb-2:
+    image: mariadb:11.2
+    hostname: mariadb-2
+    command:
+      - --wsrep-on=ON
+      - --wsrep-provider=/usr/lib/galera/libgalera_smm.so
+      - --wsrep-cluster-name=wp_galera_cluster
+      - --wsrep-cluster-address=gcomm://mariadb-1,mariadb-2,mariadb-3
+      - --wsrep-node-name=mariadb-2
+      - --wsrep-node-address=mariadb-2
+      - --wsrep-sst-method=mariabackup
+      - --wsrep-sst-auth=${MARIADB_SST_USER}:${MARIADB_SST_PASSWORD}
+      - --binlog-format=ROW
+      - --default-storage-engine=InnoDB
+      - --innodb-autoinc-lock-mode=2
+      - --innodb-buffer-pool-size=4G
+      - --innodb-log-file-size=512M
+      - --innodb-flush-log-at-trx-commit=2
+      - --innodb-flush-method=O_DIRECT
+      - --max-connections=2000
+      - --thread-cache-size=100
+      - --query-cache-type=0
+      - --performance-schema=ON
+    
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - TZ=UTC
+    
+    volumes:
+      - mariadb-2-data:/var/lib/mysql
+      - mariadb-logs-2:/var/log/mysql
+      - /var/opt/wordpress-farm/docker/configs/mariadb/galera.cnf:/etc/mysql/conf.d/galera.cnf:ro
+    
+    networks:
+      - database-net
+      - observability-net
+    
+    depends_on:
+      - mariadb-1
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.db == true
+          - node.labels.db-node == 2
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8192M
+        reservations:
+          cpus: '1.0'
+          memory: 4096M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ============================================
+  # MARIADB GALERA - Node 3
+  # ============================================
+  mariadb-3:
+    image: mariadb:11.2
+    hostname: mariadb-3
+    command:
+      - --wsrep-on=ON
+      - --wsrep-provider=/usr/lib/galera/libgalera_smm.so
+      - --wsrep-cluster-name=wp_galera_cluster
+      - --wsrep-cluster-address=gcomm://mariadb-1,mariadb-2,mariadb-3
+      - --wsrep-node-name=mariadb-3
+      - --wsrep-node-address=mariadb-3
+      - --wsrep-sst-method=mariabackup
+      - --wsrep-sst-auth=${MARIADB_SST_USER}:${MARIADB_SST_PASSWORD}
+      - --binlog-format=ROW
+      - --default-storage-engine=InnoDB
+      - --innodb-autoinc-lock-mode=2
+      - --innodb-buffer-pool-size=4G
+      - --innodb-log-file-size=512M
+      - --innodb-flush-log-at-trx-commit=2
+      - --innodb-flush-method=O_DIRECT
+      - --max-connections=2000
+      - --thread-cache-size=100
+      - --query-cache-type=0
+      - --performance-schema=ON
+    
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - TZ=UTC
+    
+    volumes:
+      - mariadb-3-data:/var/lib/mysql
+      - mariadb-logs-3:/var/log/mysql
+      - /var/opt/wordpress-farm/docker/configs/mariadb/galera.cnf:/etc/mysql/conf.d/galera.cnf:ro
+    
+    networks:
+      - database-net
+      - observability-net
+    
+    depends_on:
+      - mariadb-1
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.db == true
+          - node.labels.db-node == 3
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8192M
+        reservations:
+          cpus: '1.0'
+          memory: 4096M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ============================================
+  # PROXYSQL - Query Router & Connection Pool
+  # ============================================
+  proxysql:
+    image: proxysql/proxysql:2.6.3
+    hostname: proxysql
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/proxysql/proxysql.cnf:/etc/proxysql.cnf:ro
+      - proxysql-data:/var/lib/proxysql
+    
+    networks:
+      - database-net
+      - wordpress-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.db == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "proxysql", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # MYSQLD EXPORTER - Metrics
+  # ============================================
+  mysqld-exporter:
+    image: prom/mysqld-exporter:latest
+    hostname: mysqld-exporter
+    command:
+      - --mysqld.username=${MARIADB_EXPORTER_USER}:${MARIADB_EXPORTER_PASSWORD}
+      - --mysqld.address=proxysql:6033
+    
+    networks:
+      - database-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=9104"
+        - "prometheus.path=/metrics"
+
+volumes:
+  mariadb-1-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/data/mariadb-1
+  mariadb-2-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/data/mariadb-2
+  mariadb-3-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/data/mariadb-3
+  mariadb-logs-1:
+    driver: local
+  mariadb-logs-2:
+    driver: local
+  mariadb-logs-3:
+    driver: local
+  proxysql-data:
+    driver: local
+
+networks:
+  database-net:
+    external: true
+  wordpress-net:
+    external: true
+  observability-net:
+    external: true
+
+

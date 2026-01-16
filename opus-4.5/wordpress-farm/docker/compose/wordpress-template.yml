@@ -1,0 +1,164 @@
+# =============================================================================
+# WORDPRESS SITE TEMPLATE
+# =============================================================================
+# This is a TEMPLATE file. For each site, generate a specific config using:
+# ./scripts/site-create.sh example.com
+# =============================================================================
+
+version: "3.9"
+
+# TEMPLATE VARIABLES (replaced by site-create.sh):
+# {{SITE_DOMAIN}} - e.g., example.com
+# {{SITE_NAME}}   - e.g., example_com (sanitized for Docker)
+# {{DB_NAME}}     - e.g., wp_example_com
+# {{DB_USER}}     - e.g., user_example_com
+# {{DB_PASSWORD}} - auto-generated secure password
+
+services:
+  # ============================================
+  # WORDPRESS - {{SITE_DOMAIN}}
+  # ============================================
+  wordpress-{{SITE_NAME}}:
+    image: ${DOCKER_REGISTRY}/wordpress-farm:latest
+    hostname: "wp-{{SITE_NAME}}-{{.Task.Slot}}"
+    
+    environment:
+      # WordPress Database
+      - WORDPRESS_DB_HOST=proxysql:6033
+      - WORDPRESS_DB_NAME={{DB_NAME}}
+      - WORDPRESS_DB_USER={{DB_USER}}
+      - WORDPRESS_DB_PASSWORD={{DB_PASSWORD}}
+      - WORDPRESS_TABLE_PREFIX=wp_
+      
+      # WordPress Config
+      - WORDPRESS_CONFIG_EXTRA=
+          define('WP_REDIS_HOST', 'redis-master');
+          define('WP_REDIS_PORT', 6379);
+          define('WP_REDIS_PASSWORD', '${REDIS_PASSWORD}');
+          define('WP_REDIS_DATABASE', 0);
+          define('WP_CACHE', true);
+          define('WP_CACHE_KEY_SALT', '{{SITE_NAME}}_');
+          define('DISALLOW_FILE_EDIT', true);
+          define('AUTOMATIC_UPDATER_DISABLED', true);
+          define('WP_AUTO_UPDATE_CORE', false);
+          define('WP_POST_REVISIONS', 5);
+          define('EMPTY_TRASH_DAYS', 7);
+          define('WP_MEMORY_LIMIT', '256M');
+          define('WP_MAX_MEMORY_LIMIT', '512M');
+      
+      # Site URL (set via Traefik, but useful for CLI)
+      - WORDPRESS_SITE_URL=https://{{SITE_DOMAIN}}
+      - WORDPRESS_HOME=https://{{SITE_DOMAIN}}
+      
+      # PHP Configuration
+      - PHP_MEMORY_LIMIT=256M
+      - PHP_MAX_EXECUTION_TIME=300
+      - PHP_UPLOAD_MAX_FILESIZE=64M
+      - PHP_POST_MAX_SIZE=64M
+      - PHP_MAX_INPUT_VARS=3000
+      
+      # Timezone
+      - TZ=UTC
+    
+    volumes:
+      # Site-specific wp-content (themes, plugins, uploads)
+      - wp-{{SITE_NAME}}-content:/var/www/html/wp-content
+      
+      # Shared read-only for common plugins/themes (optional)
+      # - wp-shared-plugins:/var/www/html/wp-content/mu-plugins:ro
+    
+    networks:
+      - wordpress-net
+      - cache-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 30s
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        # Traefik Configuration (routed through Varnish)
+        - "traefik.enable=true"
+        
+        # Main site router
+        - "traefik.http.routers.wp-{{SITE_NAME}}.rule=Host(`{{SITE_DOMAIN}}`) || Host(`www.{{SITE_DOMAIN}}`)"
+        - "traefik.http.routers.wp-{{SITE_NAME}}.entrypoints=websecure"
+        - "traefik.http.routers.wp-{{SITE_NAME}}.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.wp-{{SITE_NAME}}.service=varnish"
+        - "traefik.http.routers.wp-{{SITE_NAME}}.priority=10"
+        - "traefik.http.routers.wp-{{SITE_NAME}}.middlewares=security-headers,www-redirect-{{SITE_NAME}},cloudflare-only,crowdsec-bouncer"
+        
+        # WWW to non-WWW redirect
+        - "traefik.http.middlewares.www-redirect-{{SITE_NAME}}.redirectregex.regex=^https://www\\.(.+)"
+        - "traefik.http.middlewares.www-redirect-{{SITE_NAME}}.redirectregex.replacement=https://$${1}"
+        - "traefik.http.middlewares.www-redirect-{{SITE_NAME}}.redirectregex.permanent=true"
+        
+        # Admin path (bypass Varnish)
+        - "traefik.http.routers.wp-{{SITE_NAME}}-admin.rule=(Host(`{{SITE_DOMAIN}}`) || Host(`www.{{SITE_DOMAIN}}`)) && (PathPrefix(`/wp-admin`) || PathPrefix(`/wp-login`))"
+        - "traefik.http.routers.wp-{{SITE_NAME}}-admin.entrypoints=websecure"
+        - "traefik.http.routers.wp-{{SITE_NAME}}-admin.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.wp-{{SITE_NAME}}-admin.service=wp-{{SITE_NAME}}"
+        - "traefik.http.routers.wp-{{SITE_NAME}}-admin.priority=20"
+        - "traefik.http.routers.wp-{{SITE_NAME}}-admin.middlewares=security-headers,rate-limit-admin,cloudflare-only,crowdsec-bouncer"
+        
+        # Service definition
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.server.port=80"
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.healthcheck.path=/wp-includes/images/blank.gif"
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.healthcheck.interval=30s"
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.sticky.cookie.name=wp_sticky_{{SITE_NAME}}"
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.sticky.cookie.httponly=true"
+        - "traefik.http.services.wp-{{SITE_NAME}}.loadbalancer.sticky.cookie.secure=true"
+        
+        # Docker network
+        - "traefik.docker.network=wordpress-net"
+        
+        # Custom labels for management
+        - "wpfarm.site.domain={{SITE_DOMAIN}}"
+        - "wpfarm.site.name={{SITE_NAME}}"
+        - "wpfarm.site.db.name={{DB_NAME}}"
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/wp-includes/images/blank.gif"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  wp-{{SITE_NAME}}-content:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=${NFS_SERVER},rw,nolock,soft
+      device: ":/exports/wordpress/{{SITE_NAME}}/wp-content"
+
+networks:
+  wordpress-net:
+    external: true
+  cache-net:
+    external: true
+
+

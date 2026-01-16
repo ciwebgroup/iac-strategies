@@ -1,0 +1,90 @@
+<?php
+/**
+ * WordPress Configuration File
+ * Copy this to wp-config.php and customize
+ */
+
+// Database Configuration
+define('DB_NAME', getenv('WORDPRESS_DB_NAME') ?: 'wordpress');
+define('DB_USER', getenv('WORDPRESS_DB_USER') ?: 'wordpress');
+define('DB_PASSWORD', getenv('WORDPRESS_DB_PASSWORD') ?: 'changeme');
+define('DB_HOST', getenv('WORDPRESS_DB_HOST') ?: 'mariadb-master-1:3306');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+
+// Table Prefix
+$table_prefix = getenv('WORDPRESS_TABLE_PREFIX') ?: 'wp_';
+
+// WordPress URLs
+define('WP_HOME', getenv('WP_HOME') ?: 'https://yourdomain.com');
+define('WP_SITEURL', getenv('WP_SITEURL') ?: 'https://yourdomain.com');
+
+// Security Keys (generate at https://api.wordpress.org/secret-key/1.1/salt/)
+define('AUTH_KEY',         getenv('AUTH_KEY') ?: 'put your unique phrase here');
+define('SECURE_AUTH_KEY',  getenv('SECURE_AUTH_KEY') ?: 'put your unique phrase here');
+define('LOGGED_IN_KEY',    getenv('LOGGED_IN_KEY') ?: 'put your unique phrase here');
+define('NONCE_KEY',        getenv('NONCE_KEY') ?: 'put your unique phrase here');
+define('AUTH_SALT',        getenv('AUTH_SALT') ?: 'put your unique phrase here');
+define('SECURE_AUTH_SALT', getenv('SECURE_AUTH_SALT') ?: 'put your unique phrase here');
+define('LOGGED_IN_SALT',   getenv('LOGGED_IN_SALT') ?: 'put your unique phrase here');
+define('NONCE_SALT',       getenv('NONCE_SALT') ?: 'put your unique phrase here');
+
+// Debugging
+define('WP_DEBUG', getenv('WP_DEBUG') === '1');
+define('WP_DEBUG_LOG', getenv('WP_DEBUG_LOG') === '1');
+define('WP_DEBUG_DISPLAY', false);
+define('SCRIPT_DEBUG', false);
+
+// Performance
+define('WP_CACHE', true);
+define('COMPRESS_CSS', true);
+define('COMPRESS_SCRIPTS', true);
+define('CONCATENATE_SCRIPTS', true);
+define('ENFORCE_GZIP', true);
+
+// Memory
+define('WP_MEMORY_LIMIT', '256M');
+define('WP_MAX_MEMORY_LIMIT', '512M');
+
+// File Permissions
+define('FS_METHOD', 'direct');
+define('DISALLOW_FILE_EDIT', true);
+define('DISALLOW_FILE_MODS', false);
+
+// Updates
+define('WP_AUTO_UPDATE_CORE', true);
+define('AUTOMATIC_UPDATER_DISABLED', false);
+
+// Multisite (uncomment if using multisite)
+// define('WP_ALLOW_MULTISITE', true);
+// define('MULTISITE', true);
+// define('SUBDOMAIN_INSTALL', false);
+// define('DOMAIN_CURRENT_SITE', 'yourdomain.com');
+// define('PATH_CURRENT_SITE', '/');
+// define('SITE_ID_CURRENT_SITE', 1);
+// define('BLOG_ID_CURRENT_SITE', 1);
+
+// Redis Object Cache (include if using Redis)
+if (file_exists(__DIR__ . '/wp-content/object-cache.php')) {
+    require_once __DIR__ . '/wp-content/object-cache.php';
+}
+
+// Load Redis configuration if available
+if (file_exists(__DIR__ . '/wp-config-redis.php')) {
+    require_once __DIR__ . '/wp-config-redis.php';
+}
+
+// Reverse Proxy Configuration (for Traefik)
+if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+}
+
+// Cloudflare IPs (if using Cloudflare)
+if (isset($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+    $_SERVER['REMOTE_ADDR'] = $_SERVER['HTTP_CF_CONNECTING_IP'];
+}
+
+// That's all, stop editing! Happy publishing.
+require_once ABSPATH . 'wp-settings.php';
+
+

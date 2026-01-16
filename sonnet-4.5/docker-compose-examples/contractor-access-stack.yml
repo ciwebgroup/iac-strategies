@@ -1,0 +1,550 @@
+# =============================================================================
+# CONTRACTOR ACCESS STACK - Secure Web-Based File & Database Management
+# =============================================================================
+# Provides secure, web-based access for 3rd party contractors to manage
+# WordPress files and databases without SSH access
+#
+# Features:
+# - FileBrowser (web-based file management with SFTP)
+# - Adminer (web-based database management)
+# - Site Selector API (lists all sites, loads configurations)
+# - Authentik SSO integration
+# - Per-site access control
+# - Audit logging
+#
+# Deployment: docker stack deploy -c contractor-access-stack.yml contractor
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # SITE SELECTOR API - Lists Sites & Routes
+  # ============================================
+  site-selector-api:
+    image: python:3.11-alpine
+    hostname: site-selector-api
+    networks:
+      - contractor-net
+      - database-net
+      - storage-net
+      - traefik-public
+    volumes:
+      - /var/opt/wordpress-farm/scripts/contractor:/app:ro
+      - /mnt/glusterfs:/wordpress-data:ro
+    environment:
+      # Database connection for site discovery
+      MYSQL_HOST: proxysql
+      MYSQL_PORT: 6033
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      
+      # Service URLs
+      FILEBROWSER_URL: https://files.${DOMAIN}
+      ADMINER_URL: https://db.${DOMAIN}
+      
+      # Authentik integration
+      AUTHENTIK_URL: ${AUTHENTIK_URL}
+      AUTHENTIK_TOKEN: ${AUTHENTIK_API_TOKEN}
+      
+      # API configuration
+      API_PORT: 8000
+      API_DEBUG: "false"
+      
+      # Session secret
+      SESSION_SECRET: ${API_SESSION_SECRET}
+    
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        # Install dependencies
+        pip install flask flask-cors pymysql requests pyjwt python-dotenv gunicorn
+        
+        # Run API server
+        cd /app
+        exec gunicorn --bind 0.0.0.0:8000 --workers 4 site_selector_api:app
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.ops == true
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.site-selector.rule=Host(`contractor.${DOMAIN}`)"
+        - "traefik.http.routers.site-selector.entrypoints=websecure"
+        - "traefik.http.routers.site-selector.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.site-selector.middlewares=authentik@docker"
+        - "traefik.http.services.site-selector.loadbalancer.server.port=8000"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # FILEBROWSER - Web-Based File Management + SFTP
+  # ============================================
+  filebrowser:
+    image: filebrowser/filebrowser:latest
+    hostname: filebrowser
+    networks:
+      - contractor-net
+      - storage-net
+      - traefik-public
+    volumes:
+      - /mnt/glusterfs:/srv:rw
+      - filebrowser-db:/database
+      - /var/opt/wordpress-farm/configs/filebrowser/settings.json:/config/settings.json:ro
+    environment:
+      FB_DATABASE: /database/filebrowser.db
+      FB_CONFIG: /config/settings.json
+      FB_NOAUTH: "false"
+      FB_BASEURL: /
+      FB_LOG: stdout
+    
+    ports:
+      # SFTP port (exposed for direct SFTP access)
+      - target: 22
+        published: 2222
+        protocol: tcp
+        mode: host
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.storage == true
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 30s
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.filebrowser.rule=Host(`files.${DOMAIN}`)"
+        - "traefik.http.routers.filebrowser.entrypoints=websecure"
+        - "traefik.http.routers.filebrowser.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.filebrowser.middlewares=authentik@docker,security-headers"
+        - "traefik.http.services.filebrowser.loadbalancer.server.port=80"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # ADMINER - Web-Based Database Management
+  # ============================================
+  adminer:
+    image: adminer:latest
+    hostname: adminer
+    networks:
+      - contractor-net
+      - database-net
+      - traefik-public
+    environment:
+      ADMINER_DEFAULT_SERVER: proxysql
+      ADMINER_DESIGN: pepa-linha-dark
+      ADMINER_PLUGINS: tables-filter tinymce
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.ops == true
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.adminer.rule=Host(`db.${DOMAIN}`)"
+        - "traefik.http.routers.adminer.entrypoints=websecure"
+        - "traefik.http.routers.adminer.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.adminer.middlewares=authentik@docker,security-headers,db-ratelimit"
+        - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+        - "traefik.http.middlewares.db-ratelimit.ratelimit.average=20"
+        - "traefik.http.middlewares.db-ratelimit.ratelimit.burst=40"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD", "php", "-r", "echo 'OK';"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # SFTP SERVER - Direct SFTP Access (Alternative)
+  # ============================================
+  sftp-server:
+    image: atmoz/sftp:alpine
+    hostname: sftp-server
+    networks:
+      - contractor-net
+      - storage-net
+    volumes:
+      - /mnt/glusterfs:/home/contractor/sites:rw
+      - sftp-users:/etc/sftp:ro
+      - sftp-ssh-keys:/home/contractor/.ssh:ro
+    
+    # Users configured via sftp-users volume
+    # Format: username:password:uid:gid:directories
+    # Example: contractor1:pass:::sites/wp-site-001
+    
+    ports:
+      - target: 22
+        published: 2223
+        protocol: tcp
+        mode: host
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.storage == true
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 30s
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # ============================================
+  # CONTRACTOR PORTAL - Web UI for Site Selection
+  # ============================================
+  contractor-portal:
+    image: nginx:alpine
+    hostname: contractor-portal
+    networks:
+      - contractor-net
+      - traefik-public
+    volumes:
+      - /var/opt/wordpress-farm/web/contractor-portal:/usr/share/nginx/html:ro
+      - /var/opt/wordpress-farm/configs/nginx/contractor-portal.conf:/etc/nginx/conf.d/default.conf:ro
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.contractor-portal.rule=Host(`portal.${DOMAIN}`)"
+        - "traefik.http.routers.contractor-portal.entrypoints=websecure"
+        - "traefik.http.routers.contractor-portal.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.contractor-portal.middlewares=authentik@docker"
+        - "traefik.http.services.contractor-portal.loadbalancer.server.port=80"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ============================================
+  # AUTHENTIK FORWARD AUTH - SSO Integration
+  # ============================================
+  authentik-proxy:
+    image: ghcr.io/goauthentik/proxy:latest
+    hostname: authentik-proxy
+    networks:
+      - contractor-net
+      - traefik-public
+    environment:
+      AUTHENTIK_HOST: ${AUTHENTIK_URL}
+      AUTHENTIK_INSECURE: "false"
+      AUTHENTIK_TOKEN: ${AUTHENTIK_API_TOKEN}
+      AUTHENTIK_COOKIE_SECRET: ${AUTHENTIK_COOKIE_SECRET}
+      AUTHENTIK_COOKIE_DOMAIN: ${DOMAIN}
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.authentik-proxy.rule=Host(`auth.${DOMAIN}`)"
+        - "traefik.http.routers.authentik-proxy.entrypoints=websecure"
+        - "traefik.http.routers.authentik-proxy.tls.certresolver=letsencrypt"
+        - "traefik.http.services.authentik-proxy.loadbalancer.server.port=9000"
+        # Forward auth middleware
+        - "traefik.http.middlewares.authentik.forwardauth.address=http://authentik-proxy:9000/outpost.goauthentik.io/auth/traefik"
+        - "traefik.http.middlewares.authentik.forwardauth.trustForwardHeader=true"
+        - "traefik.http.middlewares.authentik.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+        - "traefik.docker.network=traefik-public"
+
+  # ============================================
+  # AUDIT LOGGER - Track Contractor Actions
+  # ============================================
+  audit-logger:
+    image: alpine:latest
+    hostname: audit-logger
+    networks:
+      - contractor-net
+      - observability-net
+    volumes:
+      - audit-logs:/var/log/audit
+      - /var/opt/wordpress-farm/scripts/contractor:/scripts:ro
+    environment:
+      LOG_LEVEL: info
+      LOG_RETENTION_DAYS: 90
+      LOKI_URL: http://loki:3100
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+      SLACK_CHANNEL: "#contractor-audit"
+    
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        # Install dependencies
+        apk add --no-cache python3 py3-pip curl jq
+        pip3 install flask requests
+        
+        # Run audit logger
+        cd /scripts
+        exec python3 audit_logger.py
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+
+  # ============================================
+  # PHPLDAPADMIN - Manage Authentik Users (Optional)
+  # ============================================
+  user-manager:
+    image: osixia/phpldapadmin:latest
+    hostname: user-manager
+    networks:
+      - contractor-net
+      - traefik-public
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: ${AUTHENTIK_LDAP_HOST}
+      PHPLDAPADMIN_HTTPS: "false"
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.user-manager.rule=Host(`users.${DOMAIN}`)"
+        - "traefik.http.routers.user-manager.entrypoints=websecure"
+        - "traefik.http.routers.user-manager.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.user-manager.middlewares=authentik@docker,admin-only"
+        - "traefik.http.services.user-manager.loadbalancer.server.port=80"
+        # Restrict to admins only
+        - "traefik.http.middlewares.admin-only.headers.customrequestheaders.X-Require-Group=admins"
+
+  # ============================================
+  # VSCODE SERVER - Web-Based Code Editor (Optional)
+  # ============================================
+  code-server:
+    image: codercom/code-server:latest
+    hostname: code-server
+    networks:
+      - contractor-net
+      - storage-net
+      - traefik-public
+    volumes:
+      - /mnt/glusterfs:/workspace:rw
+      - code-server-config:/home/coder/.config
+      - code-server-extensions:/home/coder/.local/share/code-server
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD}
+      PROXY_DOMAIN: code.${DOMAIN}
+      SUDO_PASSWORD: ${CODE_SERVER_PASSWORD}
+      DEFAULT_WORKSPACE: /workspace
+    
+    deploy:
+      mode: replicated
+      replicas: 0  # Set to 1-2 to enable
+      placement:
+        constraints:
+          - node.labels.storage == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.code-server.rule=Host(`code.${DOMAIN}`)"
+        - "traefik.http.routers.code-server.entrypoints=websecure"
+        - "traefik.http.routers.code-server.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.code-server.middlewares=authentik@docker"
+        - "traefik.http.services.code-server.loadbalancer.server.port=8080"
+
+# =============================================================================
+# CONFIGS (Mounted from host)
+# =============================================================================
+configs:
+  filebrowser_settings:
+    file: /var/opt/wordpress-farm/configs/filebrowser/settings.json
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  filebrowser-db:
+    driver: local
+  
+  sftp-users:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/configs/sftp/users
+  
+  sftp-ssh-keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/wordpress-farm/configs/sftp/keys
+  
+  audit-logs:
+    driver: local
+  
+  code-server-config:
+    driver: local
+  
+  code-server-extensions:
+    driver: local
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  contractor-net:
+    external: true
+    name: contractor-net
+  
+  database-net:
+    external: true
+    name: database-net
+  
+  storage-net:
+    external: true
+    name: storage-net
+  
+  traefik-public:
+    external: true
+    name: traefik-public
+  
+  observability-net:
+    external: true
+    name: observability-net
+
+# =============================================================================
+# DEPLOYMENT NOTES
+# =============================================================================
+#
+# Prerequisites:
+# 1. Configure Authentik instance and get API token
+# 2. Create contractor-net network:
+#    docker network create --driver overlay --attachable contractor-net
+#
+# 3. Create required directories:
+#    mkdir -p /var/opt/wordpress-farm/{web/contractor-portal,configs/{filebrowser,sftp/{users,keys}},scripts/contractor}
+#
+# 4. Generate Authentik integration secrets
+#
+# 5. Deploy:
+#    docker stack deploy -c contractor-access-stack.yml contractor
+#
+# Access URLs:
+# - Contractor Portal:  https://portal.yourdomain.com
+# - File Manager:       https://files.yourdomain.com
+# - Database Manager:   https://db.yourdomain.com
+# - Code Editor:        https://code.yourdomain.com (if enabled)
+# - SFTP Access:        sftp://yourdomain.com:2222
+#
+# Authentik Groups:
+# - contractors: Can access files and databases
+# - admins: Full access including user management
+# - site-specific: contractor-site-001, contractor-site-002, etc.
+#
+# =============================================================================
+

@@ -1,0 +1,369 @@
+# Docker Swarm Stack - Core Services
+# WordPress Farm Infrastructure
+# Deploy with: docker stack deploy -c swarm-stack.yml wordpress-farm
+
+version: '3.8'
+
+services:
+  # Traefik - Reverse Proxy and Load Balancer
+  traefik:
+    image: traefik:v3.0
+    command:
+      - --configfile=/etc/traefik/traefik.yml
+      - --providers.docker.swarmmode=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=web
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.email=admin@yourdomain.com
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --metrics.prometheus=true
+      - --log.level=INFO
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Dashboard (protect with middleware)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-config:/etc/traefik
+      - traefik-letsencrypt:/letsencrypt
+      - traefik-logs:/var/log/traefik
+    networks:
+      - web
+      - wordpress
+      - caching
+      - monitoring
+    deploy:
+      replicas: 3
+      placement:
+        constraints:
+          - node.role == manager
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.traefik.rule=Host(`traefik.yourdomain.com`)"
+        - "traefik.http.routers.traefik.entrypoints=websecure"
+        - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.traefik.middlewares=admin-chain"
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+  # Portainer - Container Management
+  portainer:
+    image: portainer/portainer-ce:latest
+    command: -H unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    networks:
+      - management
+      - web
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(`portainer.yourdomain.com`)"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.portainer.middlewares=admin-chain"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+
+  # Varnish - HTTP Cache Layer
+  varnish:
+    image: varnish:7.4-alpine
+    volumes:
+      - varnish-config:/etc/varnish
+      - varnish-cache:/var/cache/varnish
+    networks:
+      - web
+      - wordpress
+      - caching
+    deploy:
+      replicas: 3
+      placement:
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+      labels:
+        - "traefik.enable=false"  # Varnish sits behind Traefik
+
+  # Redis - Object Cache and Sessions
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis-data:/data
+    networks:
+      - caching
+      - wordpress
+    deploy:
+      replicas: 3
+      placement:
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Memcached - Query Cache
+  memcached:
+    image: memcached:1.6-alpine
+    command: -m 512 -I 64m
+    networks:
+      - caching
+      - wordpress
+    deploy:
+      replicas: 2
+      placement:
+        preferences:
+          - spread: node.id
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "11211"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # MariaDB Master 1
+  mariadb-master-1:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: ${DB_PASSWORD:-changeme}
+      MARIADB_REPLICATION_MODE: master
+      MARIADB_REPLICATION_USER: replicator
+      MARIADB_REPLICATION_PASSWORD: ${DB_REPL_PASSWORD:-changeme}
+    volumes:
+      - mariadb-master-1-data:/var/lib/mysql
+      - mariadb-config:/etc/mysql/conf.d
+    networks:
+      - database
+      - wordpress
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MariaDB Master 2 (Replica)
+  mariadb-master-2:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: ${DB_PASSWORD:-changeme}
+      MARIADB_REPLICATION_MODE: slave
+      MARIADB_REPLICATION_USER: replicator
+      MARIADB_REPLICATION_PASSWORD: ${DB_REPL_PASSWORD:-changeme}
+      MARIADB_REPLICATION_HOST: mariadb-master-1
+    volumes:
+      - mariadb-master-2-data:/var/lib/mysql
+      - mariadb-config:/etc/mysql/conf.d
+    networks:
+      - database
+      - wordpress
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MariaDB Read Replica 1
+  mariadb-replica-1:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: ${DB_PASSWORD:-changeme}
+      MARIADB_REPLICATION_MODE: slave
+      MARIADB_REPLICATION_USER: replicator
+      MARIADB_REPLICATION_PASSWORD: ${DB_REPL_PASSWORD:-changeme}
+      MARIADB_REPLICATION_HOST: mariadb-master-1
+    volumes:
+      - mariadb-replica-1-data:/var/lib/mysql
+      - mariadb-config:/etc/mysql/conf.d
+    networks:
+      - database
+      - wordpress
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MariaDB Read Replica 2
+  mariadb-replica-2:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: ${DB_PASSWORD:-changeme}
+      MARIADB_REPLICATION_MODE: slave
+      MARIADB_REPLICATION_USER: replicator
+      MARIADB_REPLICATION_PASSWORD: ${DB_REPL_PASSWORD:-changeme}
+      MARIADB_REPLICATION_HOST: mariadb-master-2
+    volumes:
+      - mariadb-replica-2-data:/var/lib/mysql
+      - mariadb-config:/etc/mysql/conf.d
+    networks:
+      - database
+      - wordpress
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  web:
+    driver: overlay
+    attachable: true
+  wordpress:
+    driver: overlay
+    attachable: true
+  database:
+    driver: overlay
+    attachable: true
+  caching:
+    driver: overlay
+    attachable: true
+  monitoring:
+    driver: overlay
+    attachable: true
+  management:
+    driver: overlay
+    attachable: true
+
+volumes:
+  traefik-config:
+  traefik-letsencrypt:
+  traefik-logs:
+  portainer-data:
+  varnish-config:
+  varnish-cache:
+  redis-data:
+  mariadb-master-1-data:
+  mariadb-master-2-data:
+  mariadb-replica-1-data:
+  mariadb-replica-2-data:
+  mariadb-config:
+
+configs:
+  traefik-config:
+    file: ./traefik/traefik.yml
+  traefik-dynamic:
+    file: ./traefik/dynamic/dynamic.yml
+  traefik-middleware:
+    file: ./traefik/dynamic/middleware.yml
+
+

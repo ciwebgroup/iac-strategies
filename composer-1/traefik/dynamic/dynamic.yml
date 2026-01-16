@@ -1,0 +1,48 @@
+# Dynamic Configuration for Traefik
+# This file includes routers, services, and middleware definitions
+
+http:
+  routers:
+    # Default router template for WordPress sites
+    # This will be overridden by Docker labels
+    default:
+      rule: "Host(`example.com`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-chain
+        - forward-auth
+      service: default-service
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    default-service:
+      loadBalancer:
+        servers:
+          - url: "http://wordpress:80"
+
+  middlewares:
+    # Include middleware definitions
+    # See middleware.yml for detailed middleware configs
+
+tcp:
+  routers:
+    # TCP routers if needed (e.g., for database connections)
+    # Example: MySQL through Traefik (not recommended for production)
+    # mysql:
+    #   rule: "HostSNI(`mysql.example.com`)"
+    #   service: mysql-service
+    #   entryPoints:
+    #     - mysql
+    #   tls:
+    #     passthrough: true
+
+  services:
+    # TCP services
+    # mysql-service:
+    #   loadBalancer:
+    #     servers:
+    #       - address: "mysql:3306"
+
+

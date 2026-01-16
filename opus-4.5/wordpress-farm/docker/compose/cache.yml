@@ -1,0 +1,287 @@
+# =============================================================================
+# CACHE LAYER - Varnish + Redis
+# =============================================================================
+# Deployment: docker stack deploy -c cache.yml cache
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # VARNISH - Full Page Cache
+  # ============================================
+  varnish:
+    image: varnish:7.4-alpine
+    hostname: "varnish-{{.Task.Slot}}"
+    command:
+      - "-a"
+      - ":6081"
+      - "-T"
+      - ":6082"
+      - "-f"
+      - "/etc/varnish/default.vcl"
+      - "-s"
+      - "malloc,2G"
+      - "-p"
+      - "thread_pool_min=50"
+      - "-p"
+      - "thread_pool_max=1000"
+      - "-p"
+      - "thread_pool_timeout=120"
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/varnish/default.vcl:/etc/varnish/default.vcl:ro
+    
+    networks:
+      - traefik-public
+      - cache-net
+      - wordpress-net
+    
+    environment:
+      - VARNISH_SIZE=2G
+    
+    deploy:
+      mode: replicated
+      replicas: 3
+      placement:
+        constraints:
+          - node.labels.cache == true
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 60s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4096M
+        reservations:
+          cpus: '0.5'
+          memory: 2048M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.varnish.rule=HostRegexp(`{host:.+}`)"
+        - "traefik.http.routers.varnish.priority=1"
+        - "traefik.http.routers.varnish.entrypoints=websecure"
+        - "traefik.http.routers.varnish.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.varnish.middlewares=security-headers,cloudflare-only,crowdsec-bouncer"
+        - "traefik.http.services.varnish.loadbalancer.server.port=6081"
+        - "traefik.http.services.varnish.loadbalancer.healthcheck.path=/health"
+        - "traefik.http.services.varnish.loadbalancer.healthcheck.interval=10s"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD", "varnishadm", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================
+  # REDIS - Object Cache (Master)
+  # ============================================
+  redis-master:
+    image: redis:7-alpine
+    hostname: redis-master
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - "${REDIS_PASSWORD}"
+      - --masterauth
+      - "${REDIS_PASSWORD}"
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "2gb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+    
+    volumes:
+      - redis-master-data:/data
+      - /var/opt/wordpress-farm/docker/configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.cache == true
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2560M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # REDIS - Object Cache (Replicas)
+  # ============================================
+  redis-replica:
+    image: redis:7-alpine
+    hostname: "redis-replica-{{.Task.Slot}}"
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - "${REDIS_PASSWORD}"
+      - --masterauth
+      - "${REDIS_PASSWORD}"
+      - --replicaof
+      - redis-master
+      - "6379"
+      - --replica-read-only
+      - "yes"
+      - --maxmemory
+      - "2gb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    networks:
+      - cache-net
+    
+    depends_on:
+      - redis-master
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.cache == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 2560M
+        reservations:
+          cpus: '0.1'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # REDIS SENTINEL - High Availability
+  # ============================================
+  redis-sentinel:
+    image: redis:7-alpine
+    hostname: "redis-sentinel-{{.Task.Slot}}"
+    command:
+      - redis-sentinel
+      - /etc/redis/sentinel.conf
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/redis/sentinel.conf:/etc/redis/sentinel.conf:ro
+    
+    networks:
+      - cache-net
+    
+    depends_on:
+      - redis-master
+    
+    deploy:
+      mode: replicated
+      replicas: 3
+      placement:
+        constraints:
+          - node.labels.cache == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # REDIS EXPORTER - Metrics
+  # ============================================
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    hostname: redis-exporter
+    environment:
+      - REDIS_ADDR=redis://redis-master:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    
+    networks:
+      - cache-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=9121"
+        - "prometheus.path=/metrics"
+
+volumes:
+  redis-master-data:
+    driver: local
+
+networks:
+  traefik-public:
+    external: true
+  cache-net:
+    external: true
+  wordpress-net:
+    external: true
+  observability-net:
+    external: true
+
+

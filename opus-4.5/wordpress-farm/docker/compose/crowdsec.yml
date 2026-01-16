@@ -1,0 +1,124 @@
+# =============================================================================
+# CROWDSEC - Collaborative Security
+# =============================================================================
+# Deployment: docker stack deploy -c crowdsec.yml crowdsec
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # CrowdSec Local API (Central Brain)
+  # ============================================
+  crowdsec-lapi:
+    image: crowdsecurity/crowdsec:latest
+    hostname: crowdsec-lapi
+    environment:
+      - COLLECTIONS=crowdsecurity/linux crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/whitelist-good-actors crowdsecurity/wordpress
+      - CUSTOM_HOSTNAME=crowdsec-lapi
+      - TZ=UTC
+      - DISABLE_LOCAL_API=false
+      - LOCAL_API_URL=http://127.0.0.1:8080
+      # Register with CrowdSec Console (optional)
+      # - ENROLL_KEY=${CROWDSEC_ENROLL_KEY}
+      # - ENROLL_INSTANCE_NAME=wp-farm-production
+    
+    volumes:
+      - crowdsec-db:/var/lib/crowdsec/data
+      - crowdsec-config:/etc/crowdsec
+      - /var/opt/wordpress-farm/docker/configs/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - traefik-logs:/var/log/traefik:ro
+      - /var/log:/var/log/host:ro
+    
+    networks:
+      - crowdsec-net
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.crowdsec == true
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD", "cscli", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================
+  # CrowdSec Agents (Log Parsers on each node)
+  # ============================================
+  crowdsec-agent:
+    image: crowdsecurity/crowdsec:latest
+    hostname: "crowdsec-agent-{{.Node.Hostname}}"
+    environment:
+      - COLLECTIONS=crowdsecurity/linux crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/wordpress
+      - TZ=UTC
+      - DISABLE_LOCAL_API=true
+      - LOCAL_API_URL=http://crowdsec-lapi:8080
+      - AGENT_USERNAME=${CROWDSEC_AGENT_USERNAME}
+      - AGENT_PASSWORD=${CROWDSEC_AGENT_PASSWORD}
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - traefik-logs:/var/log/traefik:ro
+      - /var/log:/var/log/host:ro
+    
+    networks:
+      - crowdsec-net
+    
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=false"
+    
+    depends_on:
+      - crowdsec-lapi
+    
+    healthcheck:
+      test: ["CMD", "cscli", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  crowdsec-db:
+    driver: local
+  crowdsec-config:
+    driver: local
+  traefik-logs:
+    external: true
+
+networks:
+  crowdsec-net:
+    external: true
+  observability-net:
+    external: true
+
+

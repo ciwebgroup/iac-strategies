@@ -1,0 +1,128 @@
+# Dynamic Middleware Configuration for Traefik
+# Security, rate limiting, and optimization middleware
+
+http:
+  middlewares:
+    # Security Headers
+    security-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+          - POST
+          - DELETE
+        accessControlMaxAge: 100
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
+        referrerPolicy: "same-origin"
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          X-Frame-Options: "DENY"
+          X-XSS-Protection: "1; mode=block"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Permissions-Policy: "geolocation=(), microphone=(), camera=()"
+          Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+
+    # Rate Limiting - General
+    rate-limit:
+      rateLimit:
+        average: 100
+        period: 1m
+        burst: 50
+
+    # Rate Limiting - Strict (for login/admin)
+    rate-limit-strict:
+      rateLimit:
+        average: 10
+        period: 1m
+        burst: 5
+
+    # Rate Limiting - API
+    rate-limit-api:
+      rateLimit:
+        average: 200
+        period: 1m
+        burst: 100
+
+    # IP Whitelist (for admin access)
+    ip-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "10.0.0.0/8"
+          # Add your admin IPs here
+          # - "YOUR_IP/32"
+
+    # Compression
+    compression:
+      compress: {}
+
+    # Strip Prefix (if needed)
+    strip-prefix:
+      stripPrefix:
+        prefixes:
+          - "/api"
+
+    # Retry
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    # Circuit Breaker
+    circuit-breaker:
+      circuitBreaker:
+        expression: "NetworkErrorRatio() > 0.30"
+
+    # Forward Auth (for Crowdsec integration)
+    forward-auth:
+      forwardAuth:
+        address: "http://crowdsec-bouncer:8080"
+        authResponseHeaders:
+          - "X-Forwarded-User"
+        trustForwardHeader: true
+
+    # Basic Auth (for protected endpoints)
+    basic-auth:
+      basicAuth:
+        users:
+          # Generate with: htpasswd -nb user password
+          # Add your credentials here
+          - "admin:$apr1$..."
+
+    # Chain: Security + Rate Limit + Compression
+    security-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - rate-limit
+          - compression
+
+    # Chain: Admin Protection
+    admin-chain:
+      chain:
+        middlewares:
+          - ip-whitelist
+          - rate-limit-strict
+          - security-headers
+
+    # Chain: API Protection
+    api-chain:
+      chain:
+        middlewares:
+          - rate-limit-api
+          - security-headers
+          - compression
+
+tcp:
+  middlewares:
+    # TCP Rate Limiting
+    tcp-rate-limit:
+      rateLimit:
+        average: 1000
+        period: 1s
+
+

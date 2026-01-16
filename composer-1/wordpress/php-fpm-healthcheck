@@ -1,0 +1,20 @@
+#!/bin/sh
+# PHP-FPM Healthcheck Script
+# Checks if PHP-FPM is responding correctly
+
+set -e
+
+# Check if PHP-FPM is listening on port 9000
+if ! nc -z localhost 9000; then
+    exit 1
+fi
+
+# Check if PHP-FPM status page is accessible (if enabled)
+if php-fpm-healthcheck -v > /dev/null 2>&1; then
+    php-fpm-healthcheck -v
+else
+    # Fallback: simple TCP check
+    echo "OK"
+fi
+
+exit 0

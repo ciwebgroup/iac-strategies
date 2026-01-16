@@ -1,0 +1,408 @@
+version: '3.8'
+
+# MariaDB Galera Cluster for High Availability
+# 3-node multi-master replication cluster
+
+services:
+  # Galera Cluster Node 1
+  galera-1:
+    image: mariadb:10.11
+    hostname: galera-1
+    networks:
+      - database
+      - monitoring
+    volumes:
+      - galera-1-data:/var/lib/mysql
+      - ./mariadb-config:/etc/mysql/conf.d:ro
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_INITDB_SKIP_TZINFO: 1
+    secrets:
+      - mysql_root_password
+    command: >
+      --wsrep-new-cluster
+      --wsrep_cluster_name=wp_galera_cluster
+      --wsrep_cluster_address=gcomm://galera-1,galera-2,galera-3
+      --wsrep_node_name=galera-1
+      --wsrep_node_address=galera-1
+      --wsrep_sst_method=rsync
+      --binlog_format=ROW
+      --default_storage_engine=InnoDB
+      --innodb_autoinc_lock_mode=2
+      --innodb_buffer_pool_size=8G
+      --innodb_log_file_size=512M
+      --max_connections=1000
+      --max_allowed_packet=256M
+      --query_cache_size=0
+      --query_cache_type=0
+      --performance_schema=ON
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database == node1
+      resources:
+        limits:
+          cpus: '6'
+          memory: 12G
+        reservations:
+          cpus: '4'
+          memory: 8G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Galera Cluster Node 2
+  galera-2:
+    image: mariadb:10.11
+    hostname: galera-2
+    networks:
+      - database
+      - monitoring
+    volumes:
+      - galera-2-data:/var/lib/mysql
+      - ./mariadb-config:/etc/mysql/conf.d:ro
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_INITDB_SKIP_TZINFO: 1
+    secrets:
+      - mysql_root_password
+    command: >
+      --wsrep_cluster_name=wp_galera_cluster
+      --wsrep_cluster_address=gcomm://galera-1,galera-2,galera-3
+      --wsrep_node_name=galera-2
+      --wsrep_node_address=galera-2
+      --wsrep_sst_method=rsync
+      --binlog_format=ROW
+      --default_storage_engine=InnoDB
+      --innodb_autoinc_lock_mode=2
+      --innodb_buffer_pool_size=8G
+      --innodb_log_file_size=512M
+      --max_connections=1000
+      --max_allowed_packet=256M
+      --query_cache_size=0
+      --query_cache_type=0
+      --performance_schema=ON
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database == node2
+      resources:
+        limits:
+          cpus: '6'
+          memory: 12G
+        reservations:
+          cpus: '4'
+          memory: 8G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Galera Cluster Node 3
+  galera-3:
+    image: mariadb:10.11
+    hostname: galera-3
+    networks:
+      - database
+      - monitoring
+    volumes:
+      - galera-3-data:/var/lib/mysql
+      - ./mariadb-config:/etc/mysql/conf.d:ro
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_INITDB_SKIP_TZINFO: 1
+    secrets:
+      - mysql_root_password
+    command: >
+      --wsrep_cluster_name=wp_galera_cluster
+      --wsrep_cluster_address=gcomm://galera-1,galera-2,galera-3
+      --wsrep_node_name=galera-3
+      --wsrep_node_address=galera-3
+      --wsrep_sst_method=rsync
+      --binlog_format=ROW
+      --default_storage_engine=InnoDB
+      --innodb_autoinc_lock_mode=2
+      --innodb_buffer_pool_size=8G
+      --innodb_log_file_size=512M
+      --max_connections=1000
+      --max_allowed_packet=256M
+      --query_cache_size=0
+      --query_cache_type=0
+      --performance_schema=ON
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database == node3
+      resources:
+        limits:
+          cpus: '6'
+          memory: 12G
+        reservations:
+          cpus: '4'
+          memory: 8G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ProxySQL for query routing and load balancing
+  proxysql:
+    image: proxysql/proxysql:latest
+    hostname: proxysql
+    networks:
+      - shared-services
+      - database
+      - monitoring
+    volumes:
+      - proxysql-data:/var/lib/proxysql
+      - ./proxysql-config/proxysql.cnf:/etc/proxysql.cnf:ro
+    environment:
+      CLUSTER_NAME: wp_galera_cluster
+      CLUSTER_JOIN: galera-1,galera-2,galera-3
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets:
+      - mysql_root_password
+    ports:
+      - target: 6033
+        published: 6033
+        protocol: tcp
+        mode: host
+      - target: 6032
+        published: 6032
+        protocol: tcp
+        mode: host
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == worker
+        preferences:
+          - spread: node.id
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "127.0.0.1", "-P", "6032", "-uadmin", "-padmin", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # MySQL Exporter for Prometheus metrics
+  mysql-exporter-1:
+    image: prom/mysqld-exporter:latest
+    networks:
+      - database
+      - monitoring
+    environment:
+      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD}@(galera-1:3306)/"
+    command:
+      - '--collect.global_status'
+      - '--collect.info_schema.innodb_metrics'
+      - '--collect.auto_increment.columns'
+      - '--collect.info_schema.processlist'
+      - '--collect.binlog_size'
+      - '--collect.info_schema.tablestats'
+      - '--collect.global_variables'
+      - '--collect.info_schema.query_response_time'
+      - '--collect.info_schema.userstats'
+      - '--collect.info_schema.tables'
+      - '--collect.perf_schema.tablelocks'
+      - '--collect.perf_schema.file_events'
+      - '--collect.perf_schema.eventswaits'
+      - '--collect.perf_schema.indexiowaits'
+      - '--collect.perf_schema.tableiowaits'
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database == node1
+    secrets:
+      - mysql_exporter_password
+
+  mysql-exporter-2:
+    image: prom/mysqld-exporter:latest
+    networks:
+      - database
+      - monitoring
+    environment:
+      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD}@(galera-2:3306)/"
+    command:
+      - '--collect.global_status'
+      - '--collect.info_schema.innodb_metrics'
+      - '--collect.auto_increment.columns'
+      - '--collect.info_schema.processlist'
+      - '--collect.binlog_size'
+      - '--collect.info_schema.tablestats'
+      - '--collect.global_variables'
+      - '--collect.info_schema.query_response_time'
+      - '--collect.info_schema.userstats'
+      - '--collect.info_schema.tables'
+      - '--collect.perf_schema.tablelocks'
+      - '--collect.perf_schema.file_events'
+      - '--collect.perf_schema.eventswaits'
+      - '--collect.perf_schema.indexiowaits'
+      - '--collect.perf_schema.tableiowaits'
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database == node2
+    secrets:
+      - mysql_exporter_password
+
+  mysql-exporter-3:
+    image: prom/mysqld-exporter:latest
+    networks:
+      - database
+      - monitoring
+    environment:
+      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD}@(galera-3:3306)/"
+    command:
+      - '--collect.global_status'
+      - '--collect.info_schema.innodb_metrics'
+      - '--collect.auto_increment.columns'
+      - '--collect.info_schema.processlist'
+      - '--collect.binlog_size'
+      - '--collect.info_schema.tablestats'
+      - '--collect.global_variables'
+      - '--collect.info_schema.query_response_time'
+      - '--collect.info_schema.userstats'
+      - '--collect.info_schema.tables'
+      - '--collect.perf_schema.tablelocks'
+      - '--collect.perf_schema.file_events'
+      - '--collect.perf_schema.eventswaits'
+      - '--collect.perf_schema.indexiowaits'
+      - '--collect.perf_schema.tableiowaits'
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database == node3
+    secrets:
+      - mysql_exporter_password
+
+  # Backup Service using Percona XtraBackup
+  backup:
+    image: percona/percona-xtrabackup:8.0
+    networks:
+      - database
+    volumes:
+      - backup-data:/backup
+      - ./backup-scripts:/scripts:ro
+    environment:
+      BACKUP_SCHEDULE: "0 2 * * *"  # Daily at 2 AM
+      INCREMENTAL_SCHEDULE: "0 */6 * * *"  # Every 6 hours
+      MYSQL_HOST: galera-1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_root_password
+      S3_ENDPOINT: ${DIGITALOCEAN_SPACES_ENDPOINT}
+      S3_BUCKET: ${BACKUP_BUCKET}
+      S3_ACCESS_KEY_FILE: /run/secrets/s3_access_key
+      S3_SECRET_KEY_FILE: /run/secrets/s3_secret_key
+      BACKUP_RETENTION_DAYS: 30
+    secrets:
+      - mysql_root_password
+      - s3_access_key
+      - s3_secret_key
+    entrypoint: ["/scripts/backup-entrypoint.sh"]
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  galera-1-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/mysql/galera-1
+  
+  galera-2-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/mysql/galera-2
+  
+  galera-3-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/mysql/galera-3
+  
+  proxysql-data:
+    driver: local
+  
+  backup-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/opt/backups
+
+networks:
+  database:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+    internal: true
+  
+  shared-services:
+    external: true
+  
+  monitoring:
+    external: true
+
+secrets:
+  mysql_root_password:
+    external: true
+  mysql_exporter_password:
+    external: true
+  s3_access_key:
+    external: true
+  s3_secret_key:
+    external: true
+
+

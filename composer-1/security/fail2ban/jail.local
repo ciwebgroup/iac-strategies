@@ -1,0 +1,52 @@
+# Fail2ban Configuration
+# Custom jail configuration
+
+[DEFAULT]
+# Ban hosts for 1 hour
+bantime = 3600
+# Find hosts within 10 minutes
+findtime = 600
+# Ban after 5 failures
+maxretry = 5
+# Ban action
+banaction = iptables-multiport
+# Email notifications (configure as needed)
+# destemail = admin@yourdomain.com
+# sendername = Fail2Ban
+# action = %(action_mwl)s
+
+[sshd]
+enabled = true
+port = ssh
+logpath = %(sshd_log)s
+backend = %(sshd_backend)s
+maxretry = 3
+
+[traefik-auth]
+enabled = true
+port = http,https
+filter = traefik-auth
+logpath = /var/log/traefik/access.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+
+[wordpress-login]
+enabled = true
+port = http,https
+filter = wordpress-login
+logpath = /var/log/wordpress/*.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+
+[mysql-auth]
+enabled = true
+port = 3306
+filter = mysql-auth
+logpath = /var/log/mysql/error.log
+maxretry = 3
+findtime = 600
+bantime = 3600
+
+

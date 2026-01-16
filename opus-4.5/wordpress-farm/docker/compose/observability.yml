@@ -1,0 +1,358 @@
+# =============================================================================
+# OBSERVABILITY STACK - LGTM (Loki, Grafana, Tempo, Mimir) + Alloy
+# =============================================================================
+# Deployment: docker stack deploy -c observability.yml observability
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ============================================
+  # GRAFANA - Dashboards & Visualization
+  # ============================================
+  grafana:
+    image: grafana/grafana:11.3.0
+    hostname: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-piechart-panel,grafana-worldmap-panel
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - /var/opt/wordpress-farm/docker/configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - /var/opt/wordpress-farm/docker/configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    
+    networks:
+      - observability-net
+      - traefik-public
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+        - "traefik.http.routers.grafana.entrypoints=websecure"
+        - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.grafana.middlewares=security-headers,crowdsec-bouncer"
+        - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+        - "traefik.docker.network=traefik-public"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # MIMIR - Metrics Storage (Prometheus-compatible)
+  # ============================================
+  mimir:
+    image: grafana/mimir:2.14.0
+    hostname: mimir
+    command:
+      - -config.file=/etc/mimir/mimir.yaml
+      - -target=all
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir-data:/data
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9009/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # LOKI - Log Aggregation
+  # ============================================
+  loki:
+    image: grafana/loki:3.2.0
+    hostname: loki
+    command: -config.file=/etc/loki/loki.yaml
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # TEMPO - Distributed Tracing
+  # ============================================
+  tempo:
+    image: grafana/tempo:2.6.0
+    hostname: tempo
+    command: -config.file=/etc/tempo/tempo.yaml
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3200/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # GRAFANA ALLOY - Telemetry Collector (replaces Promtail + Agent)
+  # ============================================
+  alloy:
+    image: grafana/alloy:v1.4.0
+    hostname: "alloy-{{.Node.Hostname}}"
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --stability.level=generally-available
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log/host:ro
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /proc:/host/proc:ro
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=false"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:12345/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # NODE EXPORTER - System Metrics
+  # ============================================
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    hostname: "node-exporter-{{.Node.Hostname}}"
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=9100"
+        - "prometheus.path=/metrics"
+
+  # ============================================
+  # CADVISOR - Container Metrics
+  # ============================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    hostname: "cadvisor-{{.Node.Hostname}}"
+    command:
+      - '--docker_only=true'
+      - '--housekeeping_interval=30s'
+      - '--disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl'
+    
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    
+    networks:
+      - observability-net
+    
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      labels:
+        - "traefik.enable=false"
+        - "prometheus.scrape=true"
+        - "prometheus.port=8080"
+        - "prometheus.path=/metrics"
+
+  # ============================================
+  # ALERTMANAGER - Alert Routing
+  # ============================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    hostname: alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=https://alerts.${DOMAIN}'
+    
+    volumes:
+      - /var/opt/wordpress-farm/docker/configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    
+    networks:
+      - observability-net
+      - traefik-public
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.ops == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.alertmanager.rule=Host(`alerts.${DOMAIN}`)"
+        - "traefik.http.routers.alertmanager.entrypoints=websecure"
+        - "traefik.http.routers.alertmanager.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.alertmanager.middlewares=auth-admin,security-headers,crowdsec-bouncer"
+        - "traefik.http.services.alertmanager.loadbalancer.server.port=9093"
+        - "traefik.docker.network=traefik-public"
+
+volumes:
+  grafana-data:
+    driver: local
+  mimir-data:
+    driver: local
+  loki-data:
+    driver: local
+  tempo-data:
+    driver: local
+  alertmanager-data:
+    driver: local
+
+networks:
+  observability-net:
+    external: true
+  traefik-public:
+    external: true
+
+

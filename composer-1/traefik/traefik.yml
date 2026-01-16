@@ -1,0 +1,94 @@
+# Traefik Configuration for WordPress Farm
+# This is the main static configuration file
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# API and Dashboard
+api:
+  dashboard: true
+  insecure: false  # Set to false in production, use middleware for access
+  debug: false
+
+# Entrypoints
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+        options: modern
+
+# Providers
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: web
+    swarmMode: true
+    swarmModeRefreshSeconds: 15
+  file:
+    filename: /etc/traefik/dynamic/dynamic.yml
+    watch: true
+
+# Certificates
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@yourdomain.com  # Change this
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+      # Alternative: DNS challenge for Cloudflare
+      # dnsChallenge:
+      #   provider: cloudflare
+      #   resolvers:
+      #     - "1.1.1.1:53"
+      #     - "8.8.8.8:53"
+
+# Logging
+log:
+  level: INFO
+  format: json
+  filePath: /var/log/traefik/traefik.log
+
+accessLog:
+  filePath: /var/log/traefik/access.log
+  format: json
+  bufferingSize: 100
+
+# Metrics
+metrics:
+  prometheus:
+    entryPoint: websecure
+    addEntryPointsLabels: true
+    addServicesLabels: true
+    addRoutersLabels: true
+    buckets:
+      - 0.1
+      - 0.3
+      - 1.2
+      - 5.0
+
+# Tracing (OpenTelemetry)
+tracing:
+  otel:
+    grpc:
+      endpoint: otel-collector:4317
+    serviceName: traefik
+    sampleRate: 1.0
+
+# Ping endpoint for health checks
+ping:
+  entryPoint: web
+
+

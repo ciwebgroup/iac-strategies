@@ -1,0 +1,277 @@
+version: '3.8'
+
+# Template for individual WordPress site deployment
+# Replace {SITE_ID} and {DOMAIN} with actual values
+
+services:
+  nginx:
+    image: registry.yourdomain.com/nginx-wordpress:latest
+    networks:
+      - traefik-public
+      - wp-site-{SITE_ID}
+    volumes:
+      - wp-{SITE_ID}-uploads:/var/www/html/wp-content/uploads:ro
+      - wp-{SITE_ID}-cache:/var/www/html/wp-content/cache
+    configs:
+      - source: nginx-site-{SITE_ID}
+        target: /etc/nginx/conf.d/default.conf
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == worker
+        preferences:
+          - spread: node.id
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        # Traefik Configuration
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        
+        # HTTP Router
+        - "traefik.http.routers.site-{SITE_ID}.rule=Host(`{DOMAIN}`)"
+        - "traefik.http.routers.site-{SITE_ID}.entrypoints=websecure"
+        - "traefik.http.routers.site-{SITE_ID}.tls.certresolver=letsencrypt"
+        
+        # Middlewares
+        - "traefik.http.routers.site-{SITE_ID}.middlewares=security-headers,compress,rate-limit-site-{SITE_ID},crowdsec-bouncer"
+        
+        # Site-specific rate limiting
+        - "traefik.http.middlewares.rate-limit-site-{SITE_ID}.ratelimit.average=200"
+        - "traefik.http.middlewares.rate-limit-site-{SITE_ID}.ratelimit.burst=100"
+        
+        # Sticky Sessions (for WP admin)
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.sticky.cookie.name=wp_sticky_{SITE_ID}"
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.sticky.cookie.httpOnly=true"
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.sticky.cookie.secure=true"
+        
+        # Service Configuration
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.server.port=80"
+        
+        # Health Check
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.healthcheck.path=/health"
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.healthcheck.interval=10s"
+        - "traefik.http.services.site-{SITE_ID}.loadbalancer.healthcheck.timeout=3s"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  php-fpm:
+    image: registry.yourdomain.com/wordpress-fpm:8.2
+    networks:
+      - wp-site-{SITE_ID}
+      - shared-services
+    volumes:
+      - wp-{SITE_ID}-uploads:/var/www/html/wp-content/uploads
+      - wp-{SITE_ID}-plugins:/var/www/html/wp-content/plugins
+      - wp-{SITE_ID}-themes:/var/www/html/wp-content/themes
+    environment:
+      # WordPress Database Configuration
+      WORDPRESS_DB_HOST: proxysql:6033
+      WORDPRESS_DB_NAME: wp_site_{SITE_ID}
+      WORDPRESS_DB_USER: wp_user_{SITE_ID}
+      
+      # Redis Configuration
+      WORDPRESS_REDIS_HOST: redis-{SITE_ID}
+      WORDPRESS_REDIS_PORT: 6379
+      WP_REDIS_DATABASE: 0
+      
+      # WordPress Configuration
+      WORDPRESS_TABLE_PREFIX: wp_{SITE_ID}_
+      WORDPRESS_DEBUG: "false"
+      
+      # Performance Tuning
+      PHP_MEMORY_LIMIT: 256M
+      PHP_MAX_EXECUTION_TIME: 300
+      PHP_UPLOAD_MAX_FILESIZE: 64M
+      PHP_POST_MAX_SIZE: 64M
+      
+      # OPcache
+      PHP_OPCACHE_ENABLE: 1
+      PHP_OPCACHE_MEMORY_CONSUMPTION: 256
+      PHP_OPCACHE_MAX_ACCELERATED_FILES: 20000
+      PHP_OPCACHE_REVALIDATE_FREQ: 60
+      
+      # OpenTelemetry (for tracing)
+      OTEL_SERVICE_NAME: wordpress-site-{SITE_ID}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: 0.1
+    secrets:
+      - source: db_password_site_{SITE_ID}
+        target: db_password
+      - source: wp_auth_key_{SITE_ID}
+        target: wp_auth_key
+      - source: wp_secure_auth_key_{SITE_ID}
+        target: wp_secure_auth_key
+      - source: wp_logged_in_key_{SITE_ID}
+        target: wp_logged_in_key
+      - source: wp_nonce_key_{SITE_ID}
+        target: wp_nonce_key
+      - source: wp_auth_salt_{SITE_ID}
+        target: wp_auth_salt
+      - source: wp_secure_auth_salt_{SITE_ID}
+        target: wp_secure_auth_salt
+      - source: wp_logged_in_salt_{SITE_ID}
+        target: wp_logged_in_salt
+      - source: wp_nonce_salt_{SITE_ID}
+        target: wp_nonce_salt
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == worker
+        preferences:
+          - spread: node.id
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "php-fpm-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - wp-site-{SITE_ID}
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # WP-CLI for maintenance tasks
+  wp-cli:
+    image: registry.yourdomain.com/wordpress-fpm:8.2
+    networks:
+      - wp-site-{SITE_ID}
+      - shared-services
+    volumes:
+      - wp-{SITE_ID}-uploads:/var/www/html/wp-content/uploads
+      - wp-{SITE_ID}-plugins:/var/www/html/wp-content/plugins
+      - wp-{SITE_ID}-themes:/var/www/html/wp-content/themes
+    environment:
+      WORDPRESS_DB_HOST: proxysql:6033
+      WORDPRESS_DB_NAME: wp_site_{SITE_ID}
+      WORDPRESS_DB_USER: wp_user_{SITE_ID}
+    secrets:
+      - source: db_password_site_{SITE_ID}
+        target: db_password
+    entrypoint: ["/bin/sh"]
+    command: ["-c", "sleep infinity"]
+    deploy:
+      mode: replicated
+      replicas: 0  # Scale to 1 when needed for maintenance
+      restart_policy:
+        condition: none
+
+volumes:
+  wp-{SITE_ID}-uploads:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfs-server.local,rw,nfsvers=4
+      device: ":/var/nfs/wp-{SITE_ID}/uploads"
+  
+  wp-{SITE_ID}-plugins:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfs-server.local,rw,nfsvers=4
+      device: ":/var/nfs/wp-{SITE_ID}/plugins"
+  
+  wp-{SITE_ID}-themes:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfs-server.local,rw,nfsvers=4
+      device: ":/var/nfs/wp-{SITE_ID}/themes"
+  
+  wp-{SITE_ID}-cache:
+    driver: local
+
+networks:
+  traefik-public:
+    external: true
+  shared-services:
+    external: true
+  wp-site-{SITE_ID}:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+    internal: false
+
+configs:
+  nginx-site-{SITE_ID}:
+    external: true
+
+secrets:
+  db_password_site_{SITE_ID}:
+    external: true
+  wp_auth_key_{SITE_ID}:
+    external: true
+  wp_secure_auth_key_{SITE_ID}:
+    external: true
+  wp_logged_in_key_{SITE_ID}:
+    external: true
+  wp_nonce_key_{SITE_ID}:
+    external: true
+  wp_auth_salt_{SITE_ID}:
+    external: true
+  wp_secure_auth_salt_{SITE_ID}:
+    external: true
+  wp_logged_in_salt_{SITE_ID}:
+    external: true
+  wp_nonce_salt_{SITE_ID}:
+    external: true
+
+
