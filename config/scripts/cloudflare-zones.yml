@@ -1,0 +1,46 @@
+# =============================================================================
+# CLOUDFLARE ZONES CONFIGURATION
+# =============================================================================
+# Configure multiple Cloudflare zones for DNS management
+# Each zone can have its own settings and configuration
+
+# Default zone to use when not specified
+default_zone: example.com
+
+# Zone configurations
+zones:
+  # Primary domain
+  - domain: example.com
+    zone_id: abc123def456ghi789jkl012
+    enabled: true
+    description: "Primary WordPress farm domain"
+
+  # Secondary domains
+  - domain: example.net
+    zone_id: mno345pqr678stu901vwx234
+    enabled: true
+    description: "Secondary domain for additional sites"
+
+  - domain: example.org
+    zone_id: yza567bcd890efg123hij456
+    enabled: false
+    description: "Legacy domain - disabled"
+
+# DNS record defaults
+dns_defaults:
+  ttl: 1
+  proxied: true
+  type: A
+
+# Cloudflare settings per zone (optional)
+zone_settings:
+  example.com:
+    ssl: "full"
+    always_use_https: true
+    min_tls_version: "1.2"
+    cache_level: "aggressive"
+
+  example.net:
+    ssl: "flexible"
+    always_use_https: true
+    min_tls_version: "1.2"
