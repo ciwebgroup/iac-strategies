@@ -40,6 +40,10 @@ NC='\033[0m' # No Color
 #VERBOSE=false
 DRY_RUN=false
 FORCE=false
+INTERACTIVE=true
+
+# Verification scripts directory
+VERIFY_SCRIPTS_DIR="${SCRIPT_DIR}/verify"
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -124,6 +128,214 @@ confirm() {
             return 1
             ;;
     esac
+}
+
+# =============================================================================
+# VERIFICATION & INTERACTIVE PAUSE FUNCTIONS
+# =============================================================================
+
+# Interactive pause with verification instructions
+# Usage: interactive_pause "stage_name" "instructions"
+interactive_pause() {
+    local stage="$1"
+    local instructions="$2"
+    
+    if [[ "$INTERACTIVE" != "true" ]]; then
+        return 0
+    fi
+    
+    echo ""
+    echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}  VERIFICATION CHECKPOINT: ${stage}${NC}"
+    echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${YELLOW}Please verify the deployment before continuing:${NC}"
+    echo ""
+    echo -e "$instructions"
+    echo ""
+    echo -e "${BLUE}────────────────────────────────────────────────────────────────${NC}"
+    
+    while true; do
+        echo ""
+        read -r -p "$(echo -e "${GREEN}[R]${NC}etry / ${GREEN}[C]${NC}ontinue / ${RED}[A]${NC}bort? ")" response
+        case "$response" in
+            [rR])
+                echo "Retrying..."
+                return 1
+                ;;
+            [cC])
+                echo "Continuing..."
+                return 0
+                ;;
+            [aA])
+                echo "Aborting deployment."
+                exit 1
+                ;;
+            *)
+                echo "Please enter R, C, or A"
+                ;;
+        esac
+    done
+}
+
+# Wait for SSH connectivity to a node
+# Usage: wait_for_ssh <ip> [max_attempts] [delay_seconds]
+wait_for_ssh() {
+    local host="$1"
+    local max_attempts="${2:-30}"
+    local delay="${3:-5}"
+    local attempt=1
+    
+    log_info "Waiting for SSH on $host..."
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "root@$host" "exit 0" 2>/dev/null; then
+            log_success "SSH available on $host"
+            return 0
+        fi
+        
+        log_info "Attempt $attempt/$max_attempts - SSH not ready..."
+        sleep "$delay"
+        ((attempt++))
+    done
+    
+    log_error "SSH not available on $host after $max_attempts attempts"
+    return 1
+}
+
+# Wait for Docker to be ready on a node
+# Usage: wait_for_docker <ip> [max_attempts]
+wait_for_docker() {
+    local host="$1"
+    local max_attempts="${2:-30}"
+    local attempt=1
+    
+    log_info "Waiting for Docker on $host..."
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        if ssh -o StrictHostKeyChecking=no "root@$host" "docker info" &>/dev/null; then
+            log_success "Docker ready on $host"
+            return 0
+        fi
+        
+        log_info "Attempt $attempt/$max_attempts - Docker not ready..."
+        sleep 5
+        ((attempt++))
+    done
+    
+    log_error "Docker not ready on $host after $max_attempts attempts"
+    return 1
+}
+
+# Deploy verification scripts to a node
+# Usage: deploy_verify_scripts <ip>
+deploy_verify_scripts() {
+    local host="$1"
+    
+    log_info "Deploying verification scripts to $host..."
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_warn "[DRY RUN] Would deploy verify scripts to $host"
+        return 0
+    fi
+    
+    # Create directory and copy scripts
+    ssh -o StrictHostKeyChecking=no "root@$host" "mkdir -p /opt/verify"
+    scp -o StrictHostKeyChecking=no "${VERIFY_SCRIPTS_DIR}/"*.sh "root@$host:/opt/verify/"
+    ssh -o StrictHostKeyChecking=no "root@$host" "chmod +x /opt/verify/*.sh"
+    
+    log_success "Verification scripts deployed to $host:/opt/verify/"
+}
+
+# Wait for a Docker stack to be fully deployed
+# Usage: wait_for_stack <stack_name> <manager_ip> [timeout_seconds]
+wait_for_stack() {
+    local stack_name="$1"
+    local manager_ip="$2"
+    local timeout="${3:-300}"
+    local start_time
+    start_time=$(date +%s)
+    
+    log_info "Waiting for stack $stack_name to be ready..."
+    
+    while true; do
+        local elapsed=$(( $(date +%s) - start_time ))
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Stack $stack_name timed out after ${timeout}s"
+            ssh "root@$manager_ip" "docker stack services $stack_name" || true
+            return 1
+        fi
+        
+        # Check if all services have desired replicas
+        local not_ready
+        not_ready=$(ssh "root@$manager_ip" "docker stack services $stack_name --format '{{.Replicas}}' 2>/dev/null | grep -v -E '^([0-9]+)/\1$' | wc -l" 2>/dev/null || echo "999")
+        
+        if [[ "$not_ready" -eq 0 ]]; then
+            log_success "Stack $stack_name is ready (${elapsed}s)"
+            return 0
+        fi
+        
+        log_info "Stack $stack_name: waiting... (${elapsed}s elapsed, $not_ready services pending)"
+        sleep 10
+    done
+}
+
+# Verify swarm health
+# Usage: verify_swarm_health <manager_ip>
+verify_swarm_health() {
+    local manager_ip="$1"
+    
+    log_info "Verifying Swarm cluster health..."
+    
+    # Check all nodes are ready
+    local not_ready
+    not_ready=$(ssh "root@$manager_ip" "docker node ls --format '{{.Status}}' | grep -v 'Ready' | wc -l" 2>/dev/null || echo "999")
+    
+    if [[ "$not_ready" -gt 0 ]]; then
+        log_error "$not_ready nodes not ready"
+        ssh "root@$manager_ip" "docker node ls"
+        return 1
+    fi
+    
+    log_success "Swarm cluster healthy"
+    return 0
+}
+
+# Verify networks exist
+# Usage: verify_networks <manager_ip>
+verify_networks_exist() {
+    local manager_ip="$1"
+    local required_networks=(
+        "traefik-public"
+        "wordpress-net"
+        "database-net"
+        "storage-net"
+        "cache-net"
+        "observability-net"
+        "crowdsec-net"
+        "management-net"
+        "contractor-net"
+    )
+    local missing=0
+    
+    log_info "Verifying Docker networks..."
+    
+    for network in "${required_networks[@]}"; do
+        if ssh "root@$manager_ip" "docker network inspect $network" &>/dev/null; then
+            log_info "  ✓ $network"
+        else
+            log_error "  ✗ $network (missing)"
+            ((missing++))
+        fi
+    done
+    
+    if [[ $missing -gt 0 ]]; then
+        log_error "$missing networks missing"
+        return 1
+    fi
+    
+    log_success "All networks verified"
+    return 0
 }
 
 # =============================================================================
@@ -246,13 +458,43 @@ provision_manager_nodes() {
     local vpc_id
     vpc_id=$(do_create_vpc)
     
+    local node_ips=()
+    
     for i in $(seq 1 "${MANAGER_NODE_COUNT}"); do
         local node_name 
         node_name="wp-manager-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${MANAGER_NODE_SIZE}" "manager,swarm-manager" "$vpc_id"
+        
+        # Get IP and wait for SSH
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
+        fi
     done
     
     log_success "Manager nodes provisioned"
+    
+    interactive_pause "Manager Node Provisioning" "
+${GREEN}Verification Steps:${NC}
+  1. SSH to each manager node and verify:
+     ${CYAN}ssh root@<manager_ip> '/opt/verify/verify-node.sh'${NC}
+
+  2. Check all nodes are reachable:
+$(for ip in "${node_ips[@]}"; do echo "     ${CYAN}ssh root@$ip 'hostname && docker --version'${NC}"; done)
+
+  3. Verify Docker is running:
+     ${CYAN}ssh root@<manager_ip> 'docker info | head -20'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All ${MANAGER_NODE_COUNT} manager droplet(s) created
+  - SSH accessible on all nodes
+  - Docker installed and running
+"
 }
 
 provision_worker_nodes() {
@@ -261,13 +503,39 @@ provision_worker_nodes() {
     local vpc_id
     vpc_id=$(do_create_vpc)
     
+    local node_ips=()
+    
     for i in $(seq 1 "${WORKER_NODE_COUNT}"); do
         local node_name
         node_name="wp-worker-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${WORKER_NODE_SIZE}" "worker,swarm-worker" "$vpc_id"
+        
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
+        fi
     done
     
     log_success "Worker nodes provisioned"
+    
+    interactive_pause "Worker Node Provisioning" "
+${GREEN}Verification Steps:${NC}
+  1. Verify each worker node:
+     ${CYAN}ssh root@<worker_ip> '/opt/verify/verify-node.sh'${NC}
+
+  2. Check private network connectivity:
+     ${CYAN}ssh root@<worker_ip> 'ping -c 3 <manager_private_ip>'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All ${WORKER_NODE_COUNT} worker droplet(s) created
+  - Private network connectivity working
+  - Docker ready on all nodes
+"
 }
 
 provision_cache_nodes() {
@@ -276,13 +544,38 @@ provision_cache_nodes() {
     local vpc_id
     vpc_id=$(do_create_vpc)
     
+    local node_ips=()
+    
     for i in $(seq 1 "${CACHE_NODE_COUNT}"); do
         local node_name
         node_name="wp-cache-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${CACHE_NODE_SIZE}" "cache,swarm-worker" "$vpc_id"
+        
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
+        fi
     done
     
     log_success "Cache nodes provisioned"
+    
+    interactive_pause "Cache Node Provisioning" "
+${GREEN}Verification Steps:${NC}
+  1. Verify cache nodes are ready:
+     ${CYAN}ssh root@<cache_ip> '/opt/verify/verify-node.sh'${NC}
+
+  2. Check memory availability (Redis/Varnish need RAM):
+     ${CYAN}ssh root@<cache_ip> 'free -h'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All ${CACHE_NODE_COUNT} cache droplet(s) created
+  - Sufficient memory for caching services
+"
 }
 
 provision_database_nodes() {
@@ -291,13 +584,38 @@ provision_database_nodes() {
     local vpc_id
     vpc_id=$(do_create_vpc)
     
+    local node_ips=()
+    
     for i in $(seq 1 "${DB_NODE_COUNT}"); do
         local node_name;
         node_name="wp-db-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${DB_NODE_SIZE}" "database,swarm-worker" "$vpc_id"
+        
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
+        fi
     done
     
     log_success "Database nodes provisioned"
+    
+    interactive_pause "Database Node Provisioning" "
+${GREEN}Verification Steps:${NC}
+  1. Verify database nodes are ready:
+     ${CYAN}ssh root@<db_ip> '/opt/verify/verify-node.sh'${NC}
+
+  2. Check disk I/O performance (important for databases):
+     ${CYAN}ssh root@<db_ip> 'dd if=/dev/zero of=/tmp/test bs=1M count=100 oflag=direct 2>&1 | tail -1'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All ${DB_NODE_COUNT} database droplet(s) created  
+  - Adequate disk performance for MySQL/MariaDB
+"
 }
 
 provision_storage_nodes() {
@@ -305,6 +623,8 @@ provision_storage_nodes() {
     
     local vpc_id
     vpc_id=$(do_create_vpc)
+    
+    local node_ips=()
     
     for i in $(seq 1 "${STORAGE_NODE_COUNT}"); do
         local node_name
@@ -322,9 +642,36 @@ provision_storage_nodes() {
             
             doctl compute volume-action attach "${node_name}-vol" "$droplet_id"
         fi
+        
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
+        fi
     done
     
     log_success "Storage nodes provisioned"
+    
+    interactive_pause "Storage Node Provisioning" "
+${GREEN}Verification Steps:${NC}
+  1. Verify storage nodes and attached volumes:
+     ${CYAN}ssh root@<storage_ip> '/opt/verify/verify-node.sh'${NC}
+
+  2. Check block storage is attached and mounted:
+     ${CYAN}ssh root@<storage_ip> 'lsblk && df -h'${NC}
+
+  3. Verify NFS-ready filesystem:
+     ${CYAN}ssh root@<storage_ip> 'ls -la /mnt/volume_*'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All ${STORAGE_NODE_COUNT} storage droplet(s) created
+  - ${STORAGE_VOLUME_SIZE}GB volumes attached to each
+  - Block storage visible in lsblk output
+"
 }
 
 provision_monitor_nodes() {
@@ -333,13 +680,39 @@ provision_monitor_nodes() {
     local vpc_id
     vpc_id=$(do_create_vpc)
     
+    local node_ips=()
+    
     for i in $(seq 1 "${MONITOR_NODE_COUNT}"); do
         local node_name;
         node_name="wp-monitor-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${MONITOR_NODE_SIZE}" "monitor,swarm-worker,ops" "$vpc_id"
+        
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
+        fi
     done
     
     log_success "Monitoring nodes provisioned"
+    
+    interactive_pause "Monitor Node Provisioning" "
+${GREEN}Verification Steps:${NC}
+  1. Verify monitoring nodes are ready:
+     ${CYAN}ssh root@<monitor_ip> '/opt/verify/verify-node.sh'${NC}
+
+  2. Check disk space for metrics/logs storage:
+     ${CYAN}ssh root@<monitor_ip> 'df -h /'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All ${MONITOR_NODE_COUNT} monitor droplet(s) created
+  - Sufficient disk space for Prometheus/Loki data
+  - Tagged with 'ops' label for service placement
+"
 }
 
 # =============================================================================
@@ -379,6 +752,24 @@ init_swarm() {
     # Save tokens to .env
     sed -i "s|^SWARM_MANAGER_TOKEN=.*|SWARM_MANAGER_TOKEN=$manager_token|" "$ENV_FILE"
     sed -i "s|^SWARM_WORKER_TOKEN=.*|SWARM_WORKER_TOKEN=$worker_token|" "$ENV_FILE"
+    
+    interactive_pause "Swarm Initialization" "
+${GREEN}Verification Steps:${NC}
+  1. Check Swarm status on the leader:
+     ${CYAN}ssh root@$manager_ip 'docker info | grep -A5 Swarm'${NC}
+
+  2. Run the verify-swarm script:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-swarm.sh'${NC}
+
+  3. Verify node is listed as leader:
+     ${CYAN}ssh root@$manager_ip 'docker node ls'${NC}
+
+${YELLOW}Expected result:${NC}
+  - Swarm: active
+  - Is Manager: true
+  - 1 manager node in 'Ready' state
+  - Join tokens saved to .env file
+"
 }
 
 join_managers() {
@@ -400,6 +791,21 @@ join_managers() {
     done
     
     log_success "Manager nodes joined"
+    
+    interactive_pause "Manager Nodes Joined" "
+${GREEN}Verification Steps:${NC}
+  1. Verify all managers are in the cluster:
+     ${CYAN}ssh root@$lead_manager 'docker node ls | grep -i manager'${NC}
+
+  2. Check Raft consensus:
+     ${CYAN}ssh root@$lead_manager '/opt/verify/verify-swarm.sh'${NC}
+
+${YELLOW}Expected result:${NC}
+  - ${MANAGER_NODE_COUNT} manager nodes listed
+  - All managers show 'Ready' status
+  - One node marked as Leader
+  - Raft quorum healthy (need majority of managers)
+"
 }
 
 join_workers() {
@@ -421,6 +827,23 @@ join_workers() {
     done
     
     log_success "Worker nodes joined"
+    
+    interactive_pause "Worker Nodes Joined" "
+${GREEN}Verification Steps:${NC}
+  1. Verify all nodes are in the cluster:
+     ${CYAN}ssh root@$lead_manager 'docker node ls'${NC}
+
+  2. Run full cluster verification:
+     ${CYAN}ssh root@$lead_manager '/opt/verify/verify-swarm.sh'${NC}
+
+  3. Check node connectivity:
+     ${CYAN}ssh root@$lead_manager 'docker node ls --format \"{{.Hostname}}: {{.Status}}\"'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All manager + worker nodes listed
+  - All nodes show 'Ready' status
+  - No nodes in 'Down' or 'Unknown' state
+"
 }
 
 label_nodes() {
@@ -469,6 +892,22 @@ label_nodes() {
     done
     
     log_success "Nodes labeled"
+    
+    interactive_pause "Node Labeling Complete" "
+${GREEN}Verification Steps:${NC}
+  1. Verify all labels are applied:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-labels.sh'${NC}
+
+  2. Check individual node labels:
+     ${CYAN}ssh root@$manager_ip 'docker node ls -q | xargs -I{} docker node inspect {} --format \"{{.Description.Hostname}}: {{.Spec.Labels}}\"'${NC}
+
+${YELLOW}Expected result:${NC}
+  - Cache nodes: cache=true, cache-node=<n>
+  - Database nodes: db=true, db-node=<n>
+  - Storage nodes: storage=true
+  - Worker nodes: app=true
+  - Monitor nodes: ops=true
+"
 }
 
 create_networks() {
@@ -495,6 +934,22 @@ create_networks() {
     done
     
     log_success "Networks created"
+    
+    interactive_pause "Network Creation Complete" "
+${GREEN}Verification Steps:${NC}
+  1. Verify all overlay networks exist:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-networks.sh'${NC}
+
+  2. List all networks:
+     ${CYAN}ssh root@$manager_ip 'docker network ls --filter driver=overlay'${NC}
+
+${YELLOW}Expected result:${NC}
+  - All 9 networks created: traefik-public, wordpress-net, database-net,
+    storage-net, cache-net, observability-net, crowdsec-net,
+    management-net, contractor-net
+  - All networks using 'overlay' driver
+  - Networks are 'attachable' for debugging
+"
 }
 
 # =============================================================================
@@ -532,32 +987,163 @@ deploy_all_stacks() {
     log "Deploying all infrastructure stacks..."
     
     local stacks_dir="${PROJECT_ROOT}/docker-compose-examples"
+    local manager_ip
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
-    # Deploy in dependency order
+    # Deploy in dependency order with verification
+    
+    # 1. Traefik (reverse proxy - required by all other services)
     deploy_stack "traefik" "${stacks_dir}/traefik-stack.yml"
-    sleep 30
+    wait_for_stack "traefik" "$manager_ip" 120
     
+    interactive_pause "Traefik Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check Traefik services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh traefik'${NC}
+
+  2. Verify Traefik dashboard (if enabled):
+     ${CYAN}curl -s http://$manager_ip:8080/api/overview${NC}
+
+${YELLOW}Expected result:${NC}
+  - traefik_traefik service running
+  - Dashboard accessible (if configured)
+  - All replicas healthy
+"
+    
+    # 2. Cache (Redis/Varnish - required before WordPress)
     deploy_stack "cache" "${stacks_dir}/cache-stack.yml"
-    sleep 30
+    wait_for_stack "cache" "$manager_ip" 120
     
+    interactive_pause "Cache Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check cache services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh cache'${NC}
+
+  2. Test Redis connectivity:
+     ${CYAN}ssh root@$manager_ip 'docker exec \$(docker ps -qf name=cache_redis -n1) redis-cli ping'${NC}
+
+${YELLOW}Expected result:${NC}
+  - Redis master running on cache-node=1
+  - Varnish services running
+  - PONG response from Redis
+"
+    
+    # 3. Database (MySQL/MariaDB - required before WordPress)
     deploy_stack "database" "${stacks_dir}/database-stack.yml"
-    sleep 60
+    wait_for_stack "database" "$manager_ip" 180
     
+    interactive_pause "Database Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check database services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh database'${NC}
+
+  2. Test MySQL connectivity:
+     ${CYAN}ssh root@$manager_ip 'docker exec \$(docker ps -qf name=database_mysql -n1) mysqladmin -u root -p\${MYSQL_ROOT_PASSWORD} status'${NC}
+
+${YELLOW}Expected result:${NC}
+  - MySQL master running on db-node=1
+  - Replicas synced (if configured)
+  - Uptime showing in mysqladmin status
+"
+    
+    # 4. Monitoring (Prometheus, Grafana, Loki)
     deploy_stack "monitoring" "${stacks_dir}/monitoring-stack.yml"
-    sleep 30
+    wait_for_stack "monitoring" "$manager_ip" 180
     
-    # Note: Alerting is included in monitoring stack (Alertmanager)
-    # No separate alerting stack needed
+    interactive_pause "Monitoring Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check monitoring services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh monitoring'${NC}
+
+  2. Verify Prometheus is scraping:
+     ${CYAN}curl -s http://$manager_ip:9090/api/v1/targets | jq '.data.activeTargets | length'${NC}
+
+${YELLOW}Expected result:${NC}
+  - Prometheus, Grafana, Loki running
+  - Alertmanager healthy
+  - Targets being scraped
+"
     
+    # 5. Management (Portainer, Filebrowser)
     deploy_stack "management" "${stacks_dir}/management-stack.yml"
-    sleep 30
+    wait_for_stack "management" "$manager_ip" 120
     
+    interactive_pause "Management Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check management services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh management'${NC}
+
+  2. Verify Portainer access:
+     Check https://portainer.${DOMAIN}
+
+${YELLOW}Expected result:${NC}
+  - Portainer agent on all nodes
+  - Portainer UI accessible
+  - Filebrowser running (if configured)
+"
+    
+    # 6. Backup services
     deploy_stack "backup" "${stacks_dir}/backup-stack.yml"
-    sleep 30
+    wait_for_stack "backup" "$manager_ip" 120
     
+    interactive_pause "Backup Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check backup services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh backup'${NC}
+
+  2. Verify S3 connectivity:
+     ${CYAN}ssh root@$manager_ip 'docker exec \$(docker ps -qf name=backup -n1) s3cmd ls s3://${S3_BUCKET}/'${NC}
+
+${YELLOW}Expected result:${NC}
+  - Database backup service running
+  - File backup service running
+  - S3 bucket accessible
+"
+    
+    # 7. Contractor access
     deploy_stack "contractor" "${stacks_dir}/contractor-access-stack.yml"
+    wait_for_stack "contractor" "$manager_ip" 60
+    
+    interactive_pause "Contractor Stack Deployed" "
+${GREEN}Verification Steps:${NC}
+  1. Check contractor services:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-stack.sh contractor'${NC}
+
+  2. Verify contractor portal access:
+     Check https://contractor.${DOMAIN}
+
+${YELLOW}Expected result:${NC}
+  - Contractor portal running
+  - Site selector API accessible
+  - SSH proxy ready
+"
     
     log_success "All stacks deployed"
+    
+    # Final comprehensive verification
+    interactive_pause "Full Deployment Complete" "
+${GREEN}Final Verification Steps:${NC}
+  1. Full cluster health check:
+     ${CYAN}ssh root@$manager_ip '/opt/verify/verify-swarm.sh'${NC}
+
+  2. All stacks healthy:
+     ${CYAN}ssh root@$manager_ip 'docker stack ls'${NC}
+
+  3. Check for any failing services:
+     ${CYAN}ssh root@$manager_ip 'docker service ls --filter 'desired-state=running' --format \"{{.Name}}: {{.Replicas}}\" | grep -v -E \"[0-9]+/[0-9]+ *\$\"'${NC}
+
+${YELLOW}Deployment Summary:${NC}
+  ✓ Traefik (reverse proxy)
+  ✓ Cache (Redis + Varnish)
+  ✓ Database (MySQL)
+  ✓ Monitoring (Prometheus + Grafana + Loki)
+  ✓ Management (Portainer)
+  ✓ Backup (S3 automated backups)
+  ✓ Contractor (SSH access portal)
+
+${GREEN}Ready to deploy WordPress sites!${NC}
+  ${CYAN}$0 site --create example.com${NC}
+"
 }
 
 backup_now() {
@@ -837,7 +1423,7 @@ usage() {
     cat <<EOF
 WordPress Farm Infrastructure Management
 
-Usage: $0 COMMAND [OPTIONS]
+Usage: $0 [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
 
 Commands:
   provision           Provision all infrastructure nodes
@@ -872,16 +1458,29 @@ Commands:
   destroy             Destroy infrastructure
     --confirm         Skip confirmation prompt
 
-Options:
+Global Options:
   --dry-run           Show what would be done without making changes
   --force             Skip all confirmation prompts
+  --interactive       Enable interactive verification pauses (default)
+  --no-interactive    Disable interactive pauses (for automation)
   --verbose           Enable verbose output
   --help              Show this help message
 
 Examples:
-  # Full deployment
+  # Full deployment with interactive verification
   $0 provision --all
   $0 init-swarm
+  $0 join-nodes
+  $0 label-nodes
+  $0 create-networks
+  $0 deploy --all
+
+  # Automated deployment (no pauses)
+  $0 --no-interactive provision --all
+  $0 --no-interactive init-swarm
+
+  # Dry run to preview changes
+  $0 --dry-run provision --all
   $0 join-nodes
   $0 label-nodes
   $0 create-networks
@@ -906,6 +1505,14 @@ main() {
                 ;;
             --force)
                 FORCE=true
+                shift
+                ;;
+            --interactive)
+                INTERACTIVE=true
+                shift
+                ;;
+            --no-interactive)
+                INTERACTIVE=false
                 shift
                 ;;
             --verbose)
