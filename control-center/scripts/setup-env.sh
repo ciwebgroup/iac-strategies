@@ -313,6 +313,160 @@ generate_all_passwords() {
 # ENV FILE GENERATION
 # =============================================================================
 
+print_env_example_template() {
+    cat <<'EOF'
+# WordPress Farm Infrastructure Configuration
+# This is an example file - copy to .env and fill in your values
+# DO NOT COMMIT .env TO VERSION CONTROL
+
+# =============================================================================
+# DIGITALOCEAN CONFIGURATION
+# =============================================================================
+
+DO_API_TOKEN=dop_v1_your_actual_token_here
+DO_REGION=nyc3
+DO_SSH_KEY_NAME=wp-farm-deploy-key
+
+# DigitalOcean Spaces (S3-compatible storage)
+DO_SPACES_ACCESS_KEY=DO00XXXXXXXXXXXX
+DO_SPACES_SECRET_KEY=your_secret_key_here
+DO_SPACES_REGION=nyc3
+DO_SPACES_BUCKET=wp-farm-backups
+DO_SPACES_ENDPOINT=https://nyc3.digitaloceanspaces.com
+
+# S3 compatibility (aliases for DO Spaces)
+S3_ACCESS_KEY=${DO_SPACES_ACCESS_KEY}
+S3_SECRET_KEY=${DO_SPACES_SECRET_KEY}
+S3_REGION=${DO_SPACES_REGION}
+S3_BUCKET=${DO_SPACES_BUCKET}
+S3_ENDPOINT=https://${DO_SPACES_REGION}.digitaloceanspaces.com
+
+# =============================================================================
+# NODE CONFIGURATION
+# =============================================================================
+
+# Manager nodes (Swarm control plane)
+MANAGER_NODE_COUNT=3
+MANAGER_NODE_SIZE=s-2vcpu-4gb
+
+# Worker nodes (application servers)
+WORKER_NODE_COUNT=3
+WORKER_NODE_SIZE=s-2vcpu-4gb
+
+# Cache nodes (Redis + Varnish)
+CACHE_NODE_COUNT=2
+CACHE_NODE_SIZE=s-2vcpu-4gb
+
+# Database nodes (MySQL/MariaDB Galera Cluster)
+DB_NODE_COUNT=2
+DB_NODE_SIZE=s-4vcpu-8gb
+
+# Storage nodes (NFS for WordPress uploads)
+STORAGE_NODE_COUNT=2
+STORAGE_NODE_SIZE=s-2vcpu-4gb
+STORAGE_VOLUME_SIZE=100
+
+# Monitoring nodes (Prometheus, Grafana, Loki)
+MONITOR_NODE_COUNT=1
+MONITOR_NODE_SIZE=s-4vcpu-8gb
+
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+
+# Generate with: openssl rand -base64 32
+MYSQL_ROOT_PASSWORD=CHANGE_ME
+PROXYSQL_ADMIN_PASSWORD=CHANGE_ME
+GALERA_SST_PASSWORD=CHANGE_ME
+DB_BACKUP_PASSWORD=CHANGE_ME
+
+# Database cluster settings
+MYSQL_MAX_CONNECTIONS=500
+GALERA_CLUSTER_NAME=wp-farm-cluster
+
+# =============================================================================
+# CACHE CONFIGURATION
+# =============================================================================
+
+REDIS_PASSWORD=CHANGE_ME
+REDIS_MAXMEMORY=2gb
+REDIS_MAXMEMORY_POLICY=allkeys-lru
+
+# Generate with: openssl rand -hex 32
+VARNISH_SECRET=CHANGE_ME
+VARNISH_MEMORY=256M
+
+# =============================================================================
+# BACKUP CONFIGURATION
+# =============================================================================
+
+# Backup encryption
+BACKUP_ENCRYPTION_PASSWORD=CHANGE_ME
+RESTIC_PASSWORD=CHANGE_ME
+
+# Backup retention (days)
+BACKUP_RETENTION_DAILY=7
+BACKUP_RETENTION_WEEKLY=4
+BACKUP_RETENTION_MONTHLY=3
+
+# Backup schedule (cron format)
+BACKUP_SCHEDULE_DB=0 2 * * *
+BACKUP_SCHEDULE_FILES=0 3 * * *
+
+# =============================================================================
+# MONITORING & ALERTING
+# =============================================================================
+
+GRAFANA_ADMIN_PASSWORD=CHANGE_ME
+PROMETHEUS_RETENTION=30d
+
+# Alerting (optional)
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+SENDGRID_API_KEY=SG.your_sendgrid_key_here
+SENDGRID_FROM_EMAIL=alerts@yourdomain.com
+SENDGRID_TO_EMAIL=ops-team@yourdomain.com
+
+# =============================================================================
+# MANAGEMENT & ACCESS
+# =============================================================================
+
+PORTAINER_ADMIN_PASSWORD=CHANGE_ME
+# Generate with: htpasswd -nb admin "$(openssl rand -base64 16)"
+TRAEFIK_DASHBOARD_PASSWORD_HASH='admin:$apr1$CHANGE_ME'
+
+# Contractor access settings
+CONTRACTOR_SESSION_TIMEOUT=3600
+CONTRACTOR_ALLOWED_IPS=0.0.0.0/0
+
+# =============================================================================
+# CLOUDFLARE & DNS
+# =============================================================================
+
+CF_API_TOKEN=your_cloudflare_token_here
+CF_API_EMAIL=your-email@example.com
+CF_ACCOUNT_ID=your_account_id_here
+
+# Multi-zone config (see cloudflare-zones.yml for details)
+CF_ZONES_CONFIG=${SCRIPT_DIR}/cloudflare-zones.yml
+
+# =============================================================================
+# DOMAIN & SSL
+# =============================================================================
+
+DOMAIN=yourdomain.com
+LETSENCRYPT_EMAIL=admin@yourdomain.com
+
+# =============================================================================
+# DOCKER SWARM
+# =============================================================================
+
+# Join tokens (will be populated by init-swarm)
+SWARM_MANAGER_TOKEN=
+SWARM_WORKER_TOKEN=
+
+EOF
+}
+
 print_env_template() {
     # Generate all passwords
     local MYSQL_ROOT_PASSWORD
@@ -772,10 +926,11 @@ WordPress Farm Infrastructure - Environment Setup
 Usage: $0 [OPTIONS]
 
 Options:
-  --from-example       Start from .env.example (fill in blanks only)
-  --validate           Validate existing .env file
-  --print-env-only     Print complete .env template to stdout (no prompts)
-  --help               Show this help message
+  --from-example           Start from .env.example (fill in blanks only)
+  --validate               Validate existing .env file
+  --print-env-only         Print .env with auto-generated passwords
+  --print-env-example-only Print .env.example template with placeholders
+  --help                   Show this help message
 
 Interactive Mode (default):
   The script will guide you through configuration step-by-step,
@@ -791,8 +946,11 @@ Examples:
   # Start from example file
   $0 --from-example
 
-  # Print .env template to stdout
+  # Generate .env with auto-generated passwords
   $0 --print-env-only > .env
+
+  # Generate .env.example with placeholders
+  $0 --print-env-example-only > .env.example
 
 EOF
 }
@@ -815,6 +973,10 @@ main() {
                 mode="print-env-only"
                 shift
                 ;;
+            --print-env-example-only)
+                mode="print-env-example-only"
+                shift
+                ;;
             --help|-h)
                 usage
                 exit 0
@@ -826,6 +988,12 @@ main() {
                 ;;
         esac
     done
+    
+    # Handle print-env-example-only mode early (skip all checks)
+    if [[ "$mode" == "print-env-example-only" ]]; then
+        print_env_example_template
+        exit 0
+    fi
     
     # Handle print-env-only mode early (skip banner and checks)
     if [[ "$mode" == "print-env-only" ]]; then
