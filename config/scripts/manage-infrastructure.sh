@@ -37,7 +37,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Default values
-VERBOSE=false
+#VERBOSE=false
 DRY_RUN=false
 FORCE=false
 
@@ -77,8 +77,12 @@ require_command() {
 load_env() {
     if [[ -f "$ENV_FILE" ]]; then
         log_info "Loading environment from $ENV_FILE"
-        # shellcheck disable=SC1090
+        
+
+        # shellcheck disable=SC1090,SC1091
+
         set -a
+
         source "$ENV_FILE"
         set +a
     else
@@ -92,6 +96,7 @@ check_prerequisites() {
     require_command "doctl"
     require_command "docker"
     require_command "jq"
+    require_command "yq"
     require_command "curl"
     require_command "ssh"
     require_command "ssh-keygen"
@@ -242,7 +247,8 @@ provision_manager_nodes() {
     vpc_id=$(do_create_vpc)
     
     for i in $(seq 1 "${MANAGER_NODE_COUNT}"); do
-        local node_name="wp-manager-$(printf "%02d" "$i")"
+        local node_name 
+        node_name="wp-manager-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${MANAGER_NODE_SIZE}" "manager,swarm-manager" "$vpc_id"
     done
     
@@ -256,7 +262,8 @@ provision_worker_nodes() {
     vpc_id=$(do_create_vpc)
     
     for i in $(seq 1 "${WORKER_NODE_COUNT}"); do
-        local node_name="wp-worker-$(printf "%02d" "$i")"
+        local node_name
+        node_name="wp-worker-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${WORKER_NODE_SIZE}" "worker,swarm-worker" "$vpc_id"
     done
     
@@ -269,8 +276,9 @@ provision_cache_nodes() {
     local vpc_id
     vpc_id=$(do_create_vpc)
     
-    for i in $(seq 1 "${CACHE_NODE_COUNT}"); then
-        local node_name="wp-cache-$(printf "%02d" "$i")"
+    for i in $(seq 1 "${CACHE_NODE_COUNT}"); do
+        local node_name
+        node_name="wp-cache-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${CACHE_NODE_SIZE}" "cache,swarm-worker" "$vpc_id"
     done
     
@@ -284,7 +292,8 @@ provision_database_nodes() {
     vpc_id=$(do_create_vpc)
     
     for i in $(seq 1 "${DB_NODE_COUNT}"); do
-        local node_name="wp-db-$(printf "%02d" "$i")"
+        local node_name;
+        node_name="wp-db-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${DB_NODE_SIZE}" "database,swarm-worker" "$vpc_id"
     done
     
@@ -298,7 +307,8 @@ provision_storage_nodes() {
     vpc_id=$(do_create_vpc)
     
     for i in $(seq 1 "${STORAGE_NODE_COUNT}"); do
-        local node_name="wp-storage-$(printf "%02d" "$i")"
+        local node_name
+        node_name="wp-storage-$(printf "%02d" "$i")"
         local droplet_id
         droplet_id=$(do_create_droplet "$node_name" "${STORAGE_NODE_SIZE}" "storage,swarm-worker" "$vpc_id")
         
@@ -324,7 +334,8 @@ provision_monitor_nodes() {
     vpc_id=$(do_create_vpc)
     
     for i in $(seq 1 "${MONITOR_NODE_COUNT}"); do
-        local node_name="wp-monitor-$(printf "%02d" "$i")"
+        local node_name;
+        node_name="wp-monitor-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${MONITOR_NODE_SIZE}" "monitor,swarm-worker,ops" "$vpc_id"
     done
     
@@ -384,7 +395,7 @@ join_managers() {
             continue
         fi
         
-        ssh -o StrictHostKeyChecking=no "root@$ip" \
+        ssh -n -o StrictHostKeyChecking=no "root@$ip" \
             "docker swarm join --token ${SWARM_MANAGER_TOKEN} ${lead_manager}:2377"
     done
     
@@ -405,7 +416,7 @@ join_workers() {
             continue
         fi
         
-        ssh -o StrictHostKeyChecking=no "root@$ip" \
+        ssh -n -o StrictHostKeyChecking=no "root@$ip" \
             "docker swarm join --token ${SWARM_WORKER_TOKEN} ${lead_manager}:2377"
     done
     
@@ -421,40 +432,40 @@ label_nodes() {
     # Label cache nodes
     doctl compute droplet list --tag-name "cache" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as cache node..."
-        ssh "root@$manager_ip" "docker node update --label-add cache=true $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add cache=true $name"
         
         # Add node number for master selection
         local node_num
         node_num=$(echo "$name" | grep -oP '\d+$')
-        ssh "root@$manager_ip" "docker node update --label-add cache-node=$node_num $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add cache-node=$node_num $name"
     done
     
     # Label database nodes
     doctl compute droplet list --tag-name "database" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as database node..."
-        ssh "root@$manager_ip" "docker node update --label-add db=true $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add db=true $name"
         
         local node_num
         node_num=$(echo "$name" | grep -oP '\d+$')
-        ssh "root@$manager_ip" "docker node update --label-add db-node=$node_num $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add db-node=$node_num $name"
     done
     
     # Label storage nodes
     doctl compute droplet list --tag-name "storage" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as storage node..."
-        ssh "root@$manager_ip" "docker node update --label-add storage=true $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add storage=true $name"
     done
     
     # Label worker nodes
     doctl compute droplet list --tag-name "worker" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as app node..."
-        ssh "root@$manager_ip" "docker node update --label-add app=true $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add app=true $name"
     done
     
     # Label monitoring nodes
     doctl compute droplet list --tag-name "ops" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as ops node..."
-        ssh "root@$manager_ip" "docker node update --label-add ops=true $name"
+        ssh -n "root@$manager_ip" "docker node update --label-add ops=true $name"
     done
     
     log_success "Nodes labeled"
@@ -480,7 +491,7 @@ create_networks() {
     
     for network in "${networks[@]}"; do
         log_info "Creating network: $network..."
-        ssh "root@$manager_ip" "docker network create --driver overlay --attachable $network" || true
+        ssh -n "root@$manager_ip" "docker network create --driver overlay --attachable $network" || true
     done
     
     log_success "Networks created"
@@ -512,7 +523,7 @@ deploy_stack() {
     scp -r "${PROJECT_ROOT}/configs/"* "root@$manager_ip:/var/opt/wordpress-farm/configs/"
     
     # Deploy stack
-    ssh "root@$manager_ip" "docker stack deploy -c /tmp/${stack_name}.yml --with-registry-auth $stack_name"
+    ssh -n "root@$manager_ip" "docker stack deploy -c /tmp/${stack_name}.yml --with-registry-auth $stack_name"
     
     log_success "Stack deployed: $stack_name"
 }
@@ -693,23 +704,129 @@ backup_database() {
 # CLOUDFLARE OPERATIONS
 # =============================================================================
 
+get_cloudflare_zone_id() {
+    local domain="$1"
+    local zones_config="${CF_ZONES_CONFIG:-${SCRIPT_DIR}/cloudflare-zones.yml}"
+    
+    if [[ ! -f "$zones_config" ]]; then
+        log_error "Cloudflare zones config not found: $zones_config"
+        return 1
+    fi
+    
+    # Extract the base domain (handle subdomains)
+    local base_domain
+    if [[ "$domain" =~ ^[^.]+\.([^.]+\.[^.]+)$ ]]; then
+        base_domain="${BASH_REMATCH[1]}"
+    else
+        base_domain="$domain"
+    fi
+    
+    # Try to find zone for this domain
+    local zone_id
+    zone_id=$(yq eval ".zones[] | select(.domain == \"$base_domain\" and .enabled == true) | .zone_id" "$zones_config")
+    
+    if [[ -z "$zone_id" || "$zone_id" == "null" ]]; then
+        # Try parent domain if this is a subdomain
+        if [[ "$domain" =~ \.([^.]+\.[^.]+)$ ]]; then
+            local parent_domain="${BASH_REMATCH[1]}"
+            zone_id=$(yq eval ".zones[] | select(.domain == \"$parent_domain\" and .enabled == true) | .zone_id" "$zones_config")
+        fi
+    fi
+    
+    if [[ -z "$zone_id" || "$zone_id" == "null" ]]; then
+        # Fall back to default zone
+        local default_zone
+        default_zone=$(yq eval '.default_zone' "$zones_config")
+        zone_id=$(yq eval ".zones[] | select(.domain == \"$default_zone\" and .enabled == true) | .zone_id" "$zones_config")
+        
+        if [[ -n "$zone_id" && "$zone_id" != "null" ]]; then
+            log_warn "Using default zone ($default_zone) for domain: $domain"
+        fi
+    fi
+    
+    if [[ -z "$zone_id" || "$zone_id" == "null" ]]; then
+        log_error "No Cloudflare zone found for domain: $domain"
+        return 1
+    fi
+    
+    echo "$zone_id"
+}
+
+get_cloudflare_dns_defaults() {
+    local key="$1"
+    local zones_config="${CF_ZONES_CONFIG:-${SCRIPT_DIR}/cloudflare-zones.yml}"
+    
+    yq eval ".dns_defaults.$key" "$zones_config"
+}
+
 configure_cloudflare_dns() {
     local domain="$1"
     local ip="$2"
+    local record_type="${3:-A}"
     
     log "Configuring Cloudflare DNS for $domain..."
     
+    # Get zone ID for this domain
+    local zone_id
+    zone_id=$(get_cloudflare_zone_id "$domain")
+    
+    if [[ -z "$zone_id" ]]; then
+        log_error "Failed to determine Cloudflare zone for: $domain"
+        return 1
+    fi
+    
+    log_info "Using zone ID: $zone_id"
+    
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_warn "[DRY RUN] Would configure DNS: $domain -> $ip"
+        log_warn "[DRY RUN] Would configure DNS: $domain -> $ip (zone: $zone_id)"
         return 0
     fi
     
-    curl -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" \
-        -H "Content-Type: application/json" \
-        --data "{\"type\":\"A\",\"name\":\"$domain\",\"content\":\"$ip\",\"proxied\":true}"
+    # Get DNS defaults
+    local ttl proxied
+    ttl=$(get_cloudflare_dns_defaults "ttl")
+    proxied=$(get_cloudflare_dns_defaults "proxied")
     
-    log_success "DNS configured: $domain -> $ip"
+    # Default to safe values if not set
+    ttl="${ttl:-1}"
+    proxied="${proxied:-true}"
+    
+    # Check if record already exists
+    local existing_record
+    existing_record=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records?type=${record_type}&name=${domain}" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id // empty')
+    
+    if [[ -n "$existing_record" ]]; then
+        # Update existing record
+        log_info "Updating existing DNS record..."
+        local response
+        response=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records/${existing_record}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"${record_type}\",\"name\":\"${domain}\",\"content\":\"${ip}\",\"ttl\":${ttl},\"proxied\":${proxied}}")
+    else
+        # Create new record
+        log_info "Creating new DNS record..."
+        local response
+        response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"${record_type}\",\"name\":\"${domain}\",\"content\":\"${ip}\",\"ttl\":${ttl},\"proxied\":${proxied}}")
+    fi
+    
+    # Check response
+    local success
+    success=$(echo "$response" | jq -r '.success // false')
+    
+    if [[ "$success" == "true" ]]; then
+        log_success "DNS configured: $domain -> $ip (zone: $zone_id, proxied: $proxied)"
+    else
+        local error_msg
+        error_msg=$(echo "$response" | jq -r '.errors[0].message // "Unknown error"')
+        log_error "Failed to configure DNS: $error_msg"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -792,7 +909,7 @@ main() {
                 shift
                 ;;
             --verbose)
-                VERBOSE=true
+                # VERBOSE=true
                 set -x
                 shift
                 ;;
