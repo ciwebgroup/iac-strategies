@@ -25,23 +25,27 @@ This guide walks you through the **manual prerequisites** required before using 
 ## ✅ Prerequisites Overview
 
 ### Required Accounts
+
 - [ ] DigitalOcean account with billing enabled
 - [ ] Cloudflare account (free tier OK)
 - [ ] Domain name (registered and active)
 
 ### Optional Accounts
+
 - [ ] SendGrid account (for email alerts)
 - [ ] Twilio account (for SMS alerts)
 - [ ] GitHub/GitLab account (for code storage)
 - [ ] PagerDuty account (for incident management)
 
 ### Local Machine Requirements
+
 - [ ] Linux or macOS (Windows WSL2 also works)
 - [ ] Bash shell (version 4.0+)
 - [ ] Internet connection (stable, high-speed preferred)
 - [ ] 5GB free disk space (for tools and temp files)
 
 ### Knowledge Requirements
+
 - Basic Linux command line
 - Understanding of Docker concepts
 - Basic networking knowledge (IP, DNS, ports)
@@ -54,6 +58,7 @@ This guide walks you through the **manual prerequisites** required before using 
 ### 1. Install Required Tools
 
 #### On Ubuntu/Debian:
+
 ```bash
 # Update package list
 sudo apt update
@@ -87,6 +92,7 @@ sudo usermod -aG docker $USER
 ```
 
 #### On macOS:
+
 ```bash
 # Install Homebrew if not already installed
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -103,6 +109,7 @@ brew install --cask docker
 ```
 
 #### Verify All Tools:
+
 ```bash
 # Check each tool
 doctl version      # Should show version 1.104.0 or higher
@@ -137,6 +144,7 @@ git --version     # Should show Git version
 7. **Save token securely** (password manager recommended)
 
 Example token format:
+
 ```
 dop_v1_1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVW
 ```
@@ -219,6 +227,7 @@ Spaces is DigitalOcean's S3-compatible object storage for backups.
 8. **Copy token** (shown only once!)
 
 Example token format:
+
 ```
 abcdefghijklmnopqrstuvwxyz1234567890ABCD
 ```
@@ -232,6 +241,7 @@ abcdefghijklmnopqrstuvwxyz1234567890ABCD
 5. **Copy Zone ID**
 
 Example Zone ID:
+
 ```
 1234567890abcdef1234567890abcdef
 ```
@@ -342,6 +352,7 @@ cat ~/.ssh/wp-farm-deploy-key.pub
 ### 2. Add SSH Key to DigitalOcean
 
 **Option A: Via Web UI**
+
 1. **Navigate to:** https://cloud.digitalocean.com/account/security
 2. **Click:** "Add SSH Key"
 3. **Paste** contents of `~/.ssh/wp-farm-deploy-key.pub`
@@ -349,6 +360,7 @@ cat ~/.ssh/wp-farm-deploy-key.pub
 5. **Click:** "Add SSH Key"
 
 **Option B: Via CLI**
+
 ```bash
 # Upload SSH key to DO
 doctl compute ssh-key import wp-farm-deploy-key \
@@ -393,119 +405,137 @@ chmod 600 ~/.ssh/config
 # Clone the infrastructure repository
 cd ~/projects  # or your preferred directory
 git clone <repository-url> wordpress-farm-infrastructure
-cd wordpress-farm-infrastructure/sonnet-4.5
+cd wordpress-farm-infrastructure/control-center/scripts
 
 # Or if you're setting up from scratch
 mkdir -p ~/projects/wordpress-farm
 cd ~/projects/wordpress-farm
 ```
 
-### 2. Create Environment File
+### 2. Configure Environment (Automated)
+
+We provide an **automated setup script** that handles all environment configuration:
+
+**Option A: Interactive Mode (Recommended)**
 
 ```bash
-# Copy template to .env
-cp env.example .env
+# Run interactive setup wizard
+./setup-env.sh
+
+# The script will:
+# ✓ Prompt for all required values (API tokens, domains, etc.)
+# ✓ Auto-generate ALL passwords securely
+# ✓ Validate your configuration
+# ✓ Create .env file with everything configured
+```
+
+The interactive wizard will guide you through:
+
+1. **DigitalOcean Configuration** - API token, region, SSH key, Spaces credentials
+2. **Cloudflare Configuration** - API token, email, account ID
+3. **Domain & SSL** - Primary domain, Let's Encrypt email
+4. **Node Configuration** - Cluster sizing (managers, workers, cache, DB, etc.)
+5. **Alerting** (Optional) - Slack webhooks, SendGrid for email alerts
+6. **Password Generation** - All security credentials auto-generated
+7. **Validation** - Checks all required variables and password strength
+
+**Option B: Quick Generation (For Advanced Users)**
+
+```bash
+# Generate .env with auto-generated passwords
+./setup-env.sh --print-env-only > .env
+
+# Then edit to add your API tokens and domain:
+vim .env  # or nano, code, etc.
+
+# Update these values:
+# - DO_API_TOKEN
+# - DO_SPACES_ACCESS_KEY
+# - DO_SPACES_SECRET_KEY
+# - CF_API_TOKEN
+# - CF_API_EMAIL
+# - DOMAIN
+# - LETSENCRYPT_EMAIL
+
+# All passwords are already generated!
+```
+
+**Option C: Manual Configuration**
+
+```bash
+# Generate example template
+./setup-env.sh --print-env-example-only > .env
 
 # Secure the file
 chmod 600 .env
 
-# Open for editing
-nano .env  # or vim, code, etc.
+# Edit and replace all CHANGE_ME values
+vim .env
 ```
 
-### 3. Configure Required Variables
+### 3. What Gets Auto-Generated
 
-**Minimum required configuration:**
+The `setup-env.sh` script automatically generates:
 
-```bash
-# DigitalOcean
-DO_API_TOKEN=dop_v1_your_actual_token_here
-DO_SPACES_ACCESS_KEY=DO00XXXXXXXXXXXX
-DO_SPACES_SECRET_KEY=your_secret_key_here
-DO_SPACES_REGION=nyc3
-DO_SPACES_BUCKET=wp-farm-backups
-DO_REGION=nyc3
-DO_SSH_KEY_NAME=wp-farm-deploy-key
+✅ **Database Credentials:**
 
-# Cloudflare
-CF_API_TOKEN=your_cloudflare_token_here
-CF_API_EMAIL=your-email@example.com
-CF_ZONE_ID=your_zone_id_here
-CF_ACCOUNT_ID=your_account_id_here
+- MySQL root password (32 chars)
+- ProxySQL admin password
+- Galera SST password
+- Database backup password
 
-# Domain
-DOMAIN=yourdomain.com
-LETSENCRYPT_EMAIL=admin@yourdomain.com
+✅ **Cache Credentials:**
 
-# Security (Generate with: openssl rand -base64 32)
-MYSQL_ROOT_PASSWORD=$(openssl rand -base64 32)
-REDIS_PASSWORD=$(openssl rand -base64 32)
-PROXYSQL_ADMIN_PASSWORD=$(openssl rand -base64 32)
-VARNISH_SECRET=$(openssl rand -hex 32)
-GRAFANA_ADMIN_PASSWORD=$(openssl rand -base64 32)
-PORTAINER_ADMIN_PASSWORD=$(openssl rand -base64 32)
+- Redis password (32 chars)
+- Varnish secret (64 hex chars)
 
-# Alerting (Optional - can configure later)
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-SENDGRID_API_KEY=SG.your_sendgrid_key_here
-SENDGRID_FROM_EMAIL=alerts@yourdomain.com
-SENDGRID_TO_EMAIL=ops-team@yourdomain.com
-```
+✅ **Monitoring:**
 
-**Generate strong passwords:**
-```bash
-# Run this to generate all passwords
-cat <<EOF >> .env
+- Grafana admin password
+- Prometheus settings
 
-# Generated Passwords ($(date))
-MYSQL_ROOT_PASSWORD=$(openssl rand -base64 32)
-REDIS_PASSWORD=$(openssl rand -base64 32)
-PROXYSQL_ADMIN_PASSWORD=$(openssl rand -base64 32)
-GALERA_SST_PASSWORD=$(openssl rand -base64 32)
-DB_BACKUP_PASSWORD=$(openssl rand -base64 32)
-VARNISH_SECRET=$(openssl rand -hex 32)
-GRAFANA_ADMIN_PASSWORD=$(openssl rand -base64 32)
-PORTAINER_ADMIN_PASSWORD=$(openssl rand -base64 32)
-BACKUP_ENCRYPTION_PASSWORD=$(openssl rand -base64 32)
-RESTIC_PASSWORD=$(openssl rand -base64 32)
-EOF
-```
+✅ **Management:**
 
-**Generate htpasswd for Traefik:**
-```bash
-# Install htpasswd if not available
-sudo apt install apache2-utils
+- Portainer admin password
+- Traefik dashboard auth (htpasswd hash)
 
-# Generate password hash
-TRAEFIK_PASSWORD=$(htpasswd -nb admin "$(openssl rand -base64 16)")
+✅ **Backup Encryption:**
 
-# Add to .env
-echo "TRAEFIK_DASHBOARD_PASSWORD_HASH='$TRAEFIK_PASSWORD'" >> .env
-```
+- Restic password
+- Backup encryption key
 
 ### 4. Validate Configuration
 
 ```bash
-# Source the .env file
-set -a
-source .env
-set +a
+# Validate your .env file
+./setup-env.sh --validate
 
-# Check required variables
-required_vars=(
-    "DO_API_TOKEN"
-    "CF_API_TOKEN"
-    "DOMAIN"
-    "MYSQL_ROOT_PASSWORD"
-)
+# Expected output:
+# ✓ DO_API_TOKEN is configured
+# ✓ CF_API_TOKEN is configured
+# ✓ DOMAIN is configured
+# ✓ MYSQL_ROOT_PASSWORD is strong
+# ✓ Manager count: 3
+# ✓ Database HA enabled (2 nodes)
+# ✅ All validation checks passed!
+```
 
-for var in "${required_vars[@]}"; do
-    if [[ -z "${!var}" ]]; then
-        echo "ERROR: $var is not set"
-    else
-        echo "OK: $var is configured"
-    fi
-done
+### 5. Save Credentials Securely
+
+**IMPORTANT:** Your `.env` file contains sensitive credentials!
+
+```bash
+# Ensure .env is in .gitignore
+echo '.env' >> .gitignore
+
+# Set restrictive permissions
+chmod 600 .env
+
+# Backup to secure location (password manager, encrypted vault)
+cp .env ~/.env.wp-farm.backup
+
+# Or save critical credentials to password manager:
+grep -E '(GRAFANA|PORTAINER|TRAEFIK|MYSQL_ROOT)_PASSWORD' .env
 ```
 
 ---
@@ -526,84 +556,159 @@ curl -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
 # Expected: {"result":{"status":"active"},"success":true}
 ```
 
-### 2. Run Dry-Run
+### 2. Run Dry-Run (Optional)
 
 ```bash
 # Test what would be created (no actual changes)
-./scripts/manage-infrastructure.sh provision --all --dry-run
+./manage-infrastructure.sh provision --all --dry-run
 
 # Review output carefully
 ```
 
-### 3. Provision Infrastructure
+### 3. Deployment Mode
+
+Choose your deployment approach:
+
+**Interactive Mode (Recommended for First Time):**
 
 ```bash
-# This will take 15-30 minutes
-./scripts/manage-infrastructure.sh provision --all
+# Deploy with verification pauses at each step
+./manage-infrastructure.sh --interactive provision --all
 
-# Monitor progress
-# Creates: Managers, Workers, Cache, Database, Storage, Monitoring nodes
+# At each checkpoint, you'll see:
+# - What was just deployed
+# - Verification commands to run
+# - Option to [R]etry, [C]ontinue, or [A]bort
 ```
 
-### 4. Initialize Docker Swarm
+**Automated Mode (For Experienced Users):**
+
+```bash
+# Deploy without pauses (for automation/CI)
+./manage-infrastructure.sh --no-interactive provision --all
+```
+
+**Default:** Interactive mode is enabled by default
+
+### 4. Provision Infrastructure (15-25 minutes)
+
+```bash
+# This provisions all nodes with interactive verification
+./manage-infrastructure.sh provision --all
+
+# The script will:
+# 1. Create manager nodes (3x)
+# 2. Wait for SSH & Docker
+# 3. Deploy verification scripts to each node
+# 4. Pause for manual verification
+# 5. Repeat for workers, cache, DB, storage, monitoring
+
+# At each pause, run suggested commands:
+ssh root@<node_ip> '/opt/verify/verify-node.sh'
+```
+
+**Verification scripts deployed to each node:**
+
+- `/opt/verify/verify-node.sh` - Node health (SSH, Docker, network, disk)
+- `/opt/verify/verify-swarm.sh` - Cluster health (quorum, managers, workers)
+- `/opt/verify/verify-labels.sh` - Node labels validation
+- `/opt/verify/verify-networks.sh` - Overlay network checks
+- `/opt/verify/verify-stack.sh` - Per-stack service health
+
+### 5. Initialize Docker Swarm (2-3 minutes)
 
 ```bash
 # Initialize Swarm on first manager
-./scripts/manage-infrastructure.sh init-swarm
+./manage-infrastructure.sh init-swarm
 
-# Note the tokens displayed - they're also saved to .env
+# Verification checkpoint:
+# Run: ssh root@<manager_ip> 'docker node ls'
+# Expected: 1 manager node in 'Ready' state
 
-# Join remaining nodes
-./scripts/manage-infrastructure.sh join-nodes
-
-# This takes 5-10 minutes
+# Note: Join tokens are automatically saved to .env
 ```
 
-### 5. Label Nodes
+### 6. Join Nodes (5-10 minutes)
+
+```bash
+# Join remaining managers and all workers
+./manage-infrastructure.sh join-nodes
+
+# Verification checkpoint:
+# Run: ssh root@<manager_ip> '/opt/verify/verify-swarm.sh'
+# Expected:
+# - All managers + workers listed
+# - All nodes in 'Ready' status
+# - One manager marked as 'Leader'
+# - Raft quorum healthy
+```
+
+### 7. Label Nodes (1-2 minutes)
 
 ```bash
 # Apply node labels for service placement
-./scripts/manage-infrastructure.sh label-nodes
+./manage-infrastructure.sh label-nodes
 
-# Labels nodes as: cache, database, storage, app, ops
+# Verification checkpoint:
+# Run: ssh root@<manager_ip> '/opt/verify/verify-labels.sh'
+# Expected:
+# - cache=true on cache nodes (with cache-node=N)
+# - db=true on database nodes (with db-node=N)
+# - storage=true on storage nodes
+# - app=true on worker nodes
+# - ops=true on monitoring nodes
 ```
 
-### 6. Create Networks
+### 8. Create Networks (1 minute)
 
 ```bash
 # Create Docker overlay networks
-./scripts/manage-infrastructure.sh create-networks
+./manage-infrastructure.sh create-networks
 
-# Creates: traefik-public, wordpress-net, database-net, etc.
+# Verification checkpoint:
+# Run: ssh root@<manager_ip> '/opt/verify/verify-networks.sh'
+# Expected: All 9 networks created:
+# - traefik-public, wordpress-net, database-net, storage-net
+# - cache-net, observability-net, crowdsec-net
+# - management-net, contractor-net
 ```
 
-### 7. Deploy Stacks
+### 9. Deploy Stacks (10-20 minutes)
 
 ```bash
-# Deploy all infrastructure stacks
-./scripts/manage-infrastructure.sh deploy --all
+# Deploy all infrastructure stacks with smart waiting
+./manage-infrastructure.sh deploy --all
 
-# This deploys:
-# - Traefik (edge router)
-# - Cache layer (Varnish + Redis)
-# - Database (MariaDB Galera + ProxySQL)
-# - Monitoring (Grafana, Prometheus, Loki, Tempo)
-# - Alerting (Alertmanager)
-# - Management (Portainer)
+# The script will deploy in dependency order:
+# 1. Traefik (reverse proxy) → wait for ready
+# 2. Cache (Redis + Varnish) → wait for ready
+# 3. Database (MySQL Galera) → wait for ready
+# 4. Monitoring (Prometheus + Grafana) → wait for ready
+# 5. Management (Portainer) → wait for ready
+# 6. Backup services → wait for ready
+# 7. Contractor access → wait for ready
 
-# Takes 10-15 minutes
+# At each checkpoint, you can verify:
+ssh root@<manager_ip> '/opt/verify/verify-stack.sh <stack_name>'
 ```
 
-### 8. Verify Deployment
+**Note:** The script now uses `wait_for_stack()` instead of fixed `sleep` delays, so deployment is faster and more reliable!
+
+### 10. Final Verification
 
 ```bash
-# Run health checks
-./scripts/manage-infrastructure.sh health
+# Run comprehensive health check
+./manage-infrastructure.sh health
 
-# Expected output:
-# - All nodes: Ready
-# - All services: Running (replicas match desired)
-# - All stacks: Active
+# Or manually verify:
+ssh root@<manager_ip> 'docker node ls'          # All nodes Ready
+ssh root@<manager_ip> 'docker service ls'       # All services running
+ssh root@<manager_ip> 'docker stack ls'         # All stacks active
+ssh root@<manager_ip> '/opt/verify/verify-swarm.sh'  # Full cluster check
+
+# Check for any failing services:
+ssh root@<manager_ip> 'docker service ls --filter "desired-state=running" | grep "0/"'
+# Expected: No output (all services have replicas)
 ```
 
 ---
@@ -622,6 +727,7 @@ echo "Password: ${GRAFANA_ADMIN_PASSWORD}"
 ```
 
 Navigate to Grafana and:
+
 1. Change admin password (if needed)
 2. Import dashboards from `/configs/grafana/dashboards/`
 3. Configure data sources (auto-provisioned)
@@ -636,6 +742,7 @@ echo "Password: ${PORTAINER_ADMIN_PASSWORD}"
 ```
 
 Configure:
+
 1. Accept EULA
 2. Connect to Swarm cluster
 3. Add registries if using private images
@@ -674,6 +781,7 @@ Configure:
 ### 6. Configure DNS
 
 For each site:
+
 ```bash
 # Get load balancer IP
 LB_IP=$(doctl compute load-balancer list --format IP --no-header)
@@ -786,7 +894,7 @@ After successful initial setup:
 
 If you encounter issues:
 
-1. **Check logs:** Use `docker service logs <service>` 
+1. **Check logs:** Use `docker service logs <service>`
 2. **Review docs:** All documentation in this repository
 3. **Search issues:** GitHub issues for similar problems
 4. **Ask community:** Docker/Swarm forums
@@ -797,6 +905,7 @@ If you encounter issues:
 ## ✅ You're Ready!
 
 If you've completed all steps above, you have:
+
 - ✅ Fully automated infrastructure deployment
 - ✅ Production-ready WordPress farm
 - ✅ Comprehensive monitoring and alerting
@@ -813,4 +922,3 @@ If you've completed all steps above, you have:
 **Last Updated:** $(date)  
 **Version:** 1.0.0  
 **Status:** Production Ready
-
