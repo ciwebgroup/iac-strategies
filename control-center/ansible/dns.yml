@@ -1,0 +1,181 @@
+---
+# =============================================================================
+# CLOUDFLARE DNS CONFIGURATION
+# =============================================================================
+# Configure DNS records for WordPress sites on Cloudflare
+#
+# Usage:
+#   ansible-playbook dns.yml -e domain=example.com
+#   ansible-playbook dns.yml -e domain=example.com -e ip=1.2.3.4
+#   ansible-playbook dns.yml -e domain=example.com -e state=absent
+# =============================================================================
+
+- name: Cloudflare DNS Management
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Set default values
+      set_fact:
+        dns_state: "{{ dns_state | default('present') if dns_state is defined else 'present' }}"
+        record_type: "A"
+        proxied_status: "{{ proxied | default(true) if proxied is defined else true }}"
+        ttl_value: "{{ ttl | default(1) if ttl is defined else 1 }}"
+    
+    - name: Validate required variables
+      assert:
+        that:
+          - domain is defined
+          - domain | length > 0
+          - cloudflare_api_token is defined
+          - cloudflare_api_token | length > 0
+        fail_msg: "Required variables: domain, cloudflare_api_token"
+    
+    - name: Get manager IP if not specified
+      when: ip is not defined
+      block:
+        - name: Get manager IP address
+          shell: doctl compute droplet list --tag-name swarm-manager --format PublicIPv4 --no-header | head -n1
+          register: manager_ip_result
+          changed_when: false
+        
+        - name: Set IP variable
+          set_fact:
+            ip: "{{ manager_ip_result.stdout }}"
+    
+    - name: Check if Cloudflare zones configuration exists
+      stat:
+        path: "{{ cloudflare_zones_config }}"
+      register: zones_config_check
+      when: cloudflare_zones_config is defined
+    
+    - name: Load Cloudflare zones configuration
+      include_vars:
+        file: "{{ cloudflare_zones_config }}"
+        name: cf_zones
+      when:
+        - cloudflare_zones_config is defined
+        - zones_config_check.stat.exists is defined
+        - zones_config_check.stat.exists
+    
+    - name: Determine zone for domain
+      set_fact:
+        base_domain: "{{ domain | regex_replace('^[^.]+\\.', '') if '.' in domain[1:] else domain }}"
+    
+    - name: Find zone ID
+      set_fact:
+        zone_id: "{{ cf_zones.zones | selectattr('domain', 'equalto', base_domain) | map(attribute='zone_id') | first | default('') }}"
+      when: cf_zones is defined
+    
+    - name: Get zone ID from Cloudflare API if not in config
+      when: zone_id is not defined or zone_id | length == 0
+      block:
+        - name: Query Cloudflare for zone
+          uri:
+            url: "https://api.cloudflare.com/client/v4/zones?name={{ base_domain }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ cloudflare_api_token }}"
+              Content-Type: "application/json"
+            return_content: true
+          register: zone_query
+        
+        - name: Extract zone ID
+          set_fact:
+            zone_id: "{{ zone_query.json.result[0].id }}"
+          when: zone_query.json.result | length > 0
+    
+    - name: Fail if zone not found
+      fail:
+        msg: "Could not find Cloudflare zone for domain: {{ domain }}"
+      when: zone_id is not defined or zone_id | length == 0
+    
+    - name: Display DNS configuration
+      debug:
+        msg:
+          - "Domain: {{ domain }}"
+          - "Zone ID: {{ zone_id }}"
+          - "IP: {{ ip }}"
+          - "Record Type: {{ record_type }}"
+          - "Proxied: {{ proxied_status }}"
+    
+    - name: Check if DNS record exists
+      uri:
+        url: "https://api.cloudflare.com/client/v4/zones/{{ zone_id }}/dns_records?type={{ record_type }}&name={{ domain }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ cloudflare_api_token }}"
+          Content-Type: "application/json"
+        return_content: true
+      register: existing_record
+    
+    - name: Create or update DNS record
+      when: dns_state == 'present'
+      block:
+        - name: Update existing DNS record
+          uri:
+            url: "https://api.cloudflare.com/client/v4/zones/{{ zone_id }}/dns_records/{{ existing_record.json.result[0].id }}"
+            method: PUT
+            headers:
+              Authorization: "Bearer {{ cloudflare_api_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              type: "{{ record_type }}"
+              name: "{{ domain }}"
+              content: "{{ ip }}"
+              ttl: 1
+              proxied: true
+            return_content: true
+            status_code: 200
+          register: dns_update
+          when: existing_record.json.result | length > 0
+        
+        - name: Create new DNS record
+          uri:
+            url: "https://api.cloudflare.com/client/v4/zones/{{ zone_id }}/dns_records"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ cloudflare_api_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              type: "{{ record_type }}"
+              name: "{{ domain }}"
+              content: "{{ ip }}"
+              ttl: 1
+              proxied: true
+            return_content: true
+            status_code: 200
+          register: dns_create
+          when: existing_record.json.result | length == 0
+        
+        - name: Display DNS result
+          debug:
+            msg:
+              - "DNS record {{ 'updated' if dns_update is defined else 'created' }}"
+              - "Domain: {{ domain }} -> {{ ip }}"
+              - "Proxied: {{ proxied_status }}"
+    
+    - name: Delete DNS record
+      when: dns_state == 'absent'
+      block:
+        - name: Remove DNS record
+          uri:
+            url: "https://api.cloudflare.com/client/v4/zones/{{ zone_id }}/dns_records/{{ existing_record.json.result[0].id }}"
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ cloudflare_api_token }}"
+              Content-Type: "application/json"
+            status_code: 200
+          when: existing_record.json.result | length > 0
+        
+        - name: Display deletion result
+          debug:
+            msg: "DNS record deleted: {{ domain }}"
+          when: existing_record.json.result | length > 0
+        
+        - name: Record doesn't exist
+          debug:
+            msg: "DNS record doesn't exist: {{ domain }}"
+          when: existing_record.json.result | length == 0

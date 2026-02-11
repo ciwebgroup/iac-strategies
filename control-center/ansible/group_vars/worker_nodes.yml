@@ -1,0 +1,42 @@
+---
+# Variables specific to Worker tier nodes (WordPress applications)
+
+node_role: worker
+node_type: worker
+tier: application
+
+# Node labels for service placement
+node_labels:
+  app: "true"
+  tier: application
+  role: worker
+
+# PHP-FPM optimizations
+php_fpm_pm_max_children: 50
+php_fpm_pm_start_servers: 10
+php_fpm_pm_min_spare_servers: 5
+php_fpm_pm_max_spare_servers: 20
+
+# WordPress specific
+wordpress_max_sites_per_node: 25
+
+# System optimizations for application workload
+sysctl_config:
+  # Connection limits
+  net.core.somaxconn: 4096
+  net.ipv4.tcp_max_syn_backlog: 4096
+  # File descriptors
+  fs.file-max: 65536
+  # Networking
+  net.ipv4.ip_local_port_range: "10000 65535"
+  net.ipv4.tcp_tw_reuse: 1
+  net.core.rmem_max: 16777216
+  net.core.wmem_max: 16777216
+
+# Placement constraints
+placement_constraints:
+  - "node.labels.app == true"
+
+# Monitoring
+enable_php_fpm_exporter: true
+php_fpm_exporter_port: 9253

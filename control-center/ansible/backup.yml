@@ -1,0 +1,146 @@
+---
+# =============================================================================
+# BACKUP OPERATIONS
+# =============================================================================
+# Trigger and manage backups for WordPress farm
+#
+# Usage:
+#   ansible-playbook backup.yml                    # All backups
+#   ansible-playbook backup.yml --tags database    # Database only
+#   ansible-playbook backup.yml --tags wordpress   # Files only
+#   ansible-playbook backup.yml --tags cleanup     # Cleanup old backups
+# =============================================================================
+
+- name: Backup Operations
+  hosts: swarm_managers[0]
+  gather_facts: false
+  
+  tasks:
+    - name: Verify backup stack is running
+      command: docker service ls --filter name=backup_ --format '{{ '{{' }}.Name{{ '}}' }}'
+      register: backup_services
+      changed_when: false
+    
+    - name: Assert backup services exist
+      assert:
+        that:
+          - backup_services.stdout_lines | length > 0
+        fail_msg: "Backup stack not deployed. Run: ansible-playbook deploy.yml --tags stacks,backup"
+
+
+- name: Database Backup
+  hosts: swarm_managers[0]
+  tags: [database, db]
+  
+  tasks:
+    - name: Trigger database backup
+      shell: |
+        docker exec $(docker ps -qf 'name=backup_database-backup' -n1) /scripts/backup-databases.sh
+      register: db_backup
+      changed_when: true
+    
+    - name: Display database backup result
+      debug:
+        msg: "{{ db_backup.stdout_lines }}"
+    
+    - name: Check backup was created
+      shell: |
+        docker exec $(docker ps -qf 'name=backup_database-backup' -n1) \
+        s3cmd ls s3://{{ s3_bucket }}/{{ s3_prefix_database }}/ | tail -5
+      register: recent_backups
+      changed_when: false
+    
+    - name: Display recent backups
+      debug:
+        msg:
+          - "Recent database backups:"
+          - "{{ recent_backups.stdout_lines }}"
+
+
+- name: WordPress Files Backup
+  hosts: swarm_managers[0]
+  tags: [wordpress, files]
+  
+  tasks:
+    - name: Trigger WordPress files backup
+      shell: |
+        docker exec $(docker ps -qf 'name=backup_wordpress-file-backup' -n1) /scripts/backup-wordpress-files.sh
+      register: wp_backup
+      changed_when: true
+    
+    - name: Display WordPress backup result
+      debug:
+        msg: "{{ wp_backup.stdout_lines }}"
+    
+    - name: Check backup was created
+      shell: |
+        docker exec $(docker ps -qf 'name=backup_wordpress-file-backup' -n1) \
+        s3cmd ls s3://{{ s3_bucket }}/{{ s3_prefix_wordpress }}/ | tail -5
+      register: recent_wp_backups
+      changed_when: false
+    
+    - name: Display recent WordPress backups
+      debug:
+        msg:
+          - "Recent WordPress file backups:"
+          - "{{ recent_wp_backups.stdout_lines }}"
+
+
+- name: Backup Cleanup
+  hosts: swarm_managers[0]
+  tags: [cleanup]
+  
+  tasks:
+    - name: Run backup retention cleanup
+      shell: |
+        docker exec $(docker ps -qf 'name=backup_backup-cleanup' -n1) /scripts/backup-cleanup.sh
+      register: cleanup
+      changed_when: true
+    
+    - name: Display cleanup results
+      debug:
+        msg: "{{ cleanup.stdout_lines }}"
+
+
+- name: Backup Health Check
+  hosts: swarm_managers[0]
+  tags: [verify, health]
+  
+  tasks:
+    - name: Check backup monitoring
+      shell: |
+        docker exec $(docker ps -qf 'name=backup_backup-monitor' -n1) /scripts/backup-monitor.sh --check-once
+      register: backup_health
+      changed_when: false
+      failed_when: false
+    
+    - name: Display backup health status
+      debug:
+        msg: "{{ backup_health.stdout_lines }}"
+    
+    - name: Alert if backups are unhealthy
+      fail:
+        msg: "Backup health check failed!"
+      when: backup_health.rc != 0
+
+
+- name: Backup Summary
+  hosts: localhost
+  tags: [always]
+  
+  tasks:
+    - name: Display backup summary
+      debug:
+        msg:
+          - "========================================"
+          - "Backup Operations Complete"
+          - "========================================"
+          - "S3 Bucket: {{ s3_bucket }}"
+          - "Retention: {{ backup_retention_days }} days"
+          - ""
+          - "Available tags:"
+          - "  --tags database  : Backup databases only"
+          - "  --tags wordpress : Backup files only"
+          - "  --tags cleanup   : Clean old backups"
+          - "  --tags verify    : Check backup health"
+          - "========================================"

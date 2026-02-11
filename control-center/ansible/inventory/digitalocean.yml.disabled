@@ -1,0 +1,56 @@
+---
+# DigitalOcean Dynamic Inventory Configuration
+# This plugin dynamically discovers all droplets with wordpress-farm tags
+
+plugin: community.digitalocean.digitalocean
+
+# Authentication (uses DO_API_TOKEN environment variable)
+api_token: "{{ lookup('env', 'DO_API_TOKEN') }}"
+
+# Only include droplets with specific tags
+filters:
+  - key: tags
+    values:
+      - wordpress-farm
+      - manager
+      - worker
+      - cache
+      - database
+      - storage
+      - monitor
+
+# Group droplets by tags
+groups:
+  swarm_managers: "'manager' in (do_tags | list)"
+  swarm_workers: "'worker' in (do_tags | list) or 'cache' in (do_tags | list) or 'database' in (do_tags | list) or 'storage' in (do_tags | list) or 'monitor' in (do_tags | list)"
+  cache_nodes: "'cache' in (do_tags | list)"
+  database_nodes: "'database' in (do_tags | list)"
+  storage_nodes: "'storage' in (do_tags | list)"
+  monitor_nodes: "'monitor' in (do_tags | list)"
+  worker_nodes: "'worker' in (do_tags | list) and 'cache' not in (do_tags | list) and 'database' not in (do_tags | list)"
+  all_nodes: "true"
+
+# Compose variables
+compose:
+  ansible_host: do_networks.v4[0].ip_address
+  private_ip: do_networks.v4[1].ip_address if (do_networks.v4 | length > 1) else do_networks.v4[0].ip_address
+  node_id: do_id
+  node_name: do_name
+  node_region: do_region.slug
+  node_size: do_size.slug
+  node_tags: do_tags
+
+# Keyed groups for more organization
+keyed_groups:
+  - key: do_region.slug
+    prefix: region
+  - key: do_size.slug
+    prefix: size
+  - key: do_tags | list
+    prefix: tag
+
+# Cache configuration for performance
+cache: true
+cache_plugin: jsonfile
+cache_timeout: 300
+cache_connection: /tmp/ansible_digitalocean_cache

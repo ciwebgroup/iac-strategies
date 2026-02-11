@@ -5,7 +5,7 @@ version: '3.8'
 
 services:
   nginx:
-    image: registry.yourdomain.com/nginx-wordpress:latest
+    image: registry.ciwebgroup.com/nginx-wordpress:latest
     networks:
       - traefik-public
       - wp-site-{SITE_ID}
@@ -69,7 +69,7 @@ services:
       start_period: 30s
 
   php-fpm:
-    image: registry.yourdomain.com/wordpress-fpm:8.2
+    image: registry.ciwebgroup.com/wordpress-fpm:8.2
     networks:
       - wp-site-{SITE_ID}
       - shared-services
@@ -191,7 +191,7 @@ services:
 
   # WP-CLI for maintenance tasks
   wp-cli:
-    image: registry.yourdomain.com/wordpress-fpm:8.2
+    image: registry.ciwebgroup.com/wordpress-fpm:8.2
     networks:
       - wp-site-{SITE_ID}
       - shared-services

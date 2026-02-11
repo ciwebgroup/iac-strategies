@@ -1,0 +1,151 @@
+version: '3.8'
+
+# Semaphore UI Stack: Modern UI for Ansible, Terraform, OpenTofu
+# Ansible automation and DevOps task execution platform
+
+services:
+  # Semaphore UI - Ansible/Terraform Web Interface
+  semaphore:
+    image: semaphoreui/semaphore:latest
+    hostname: semaphore
+    networks:
+      - management
+      - traefik-public
+    volumes:
+      - semaphore-data:/etc/semaphore
+      - semaphore-tmp:/tmp/semaphore
+      # Mount your ansible playbooks/inventory
+      - /var/opt/manage/control-center/ansible:/ansible:ro
+    environment:
+      # Database Configuration (using embedded BoltDB)
+      SEMAPHORE_DB_DIALECT: bolt
+      SEMAPHORE_DB: /etc/semaphore/database.boltdb
+      
+      # Admin User Configuration (from secrets)
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD}
+      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME:-Administrator}
+      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL:-admin@localhost}
+      
+      # Application Configuration
+      SEMAPHORE_ACCESS_KEY_ENCRYPTION: ${SEMAPHORE_ACCESS_KEY_ENCRYPTION}
+      SEMAPHORE_LDAP_ACTIVATED: 'no'
+      SEMAPHORE_PORT: 3000
+      
+      # Web Configuration
+      SEMAPHORE_WEB_ROOT: /
+      
+      # Concurrency
+      SEMAPHORE_MAX_PARALLEL_TASKS: 5
+      
+      # Session Configuration
+      SEMAPHORE_COOKIE_HASH: ${SEMAPHORE_COOKIE_HASH}
+      SEMAPHORE_COOKIE_ENCRYPTION: ${SEMAPHORE_COOKIE_ENCRYPTION}
+      
+      # Notifications (optional)
+      SEMAPHORE_EMAIL_SENDER: ${SEMAPHORE_EMAIL_SENDER:-semaphore@localhost}
+      SEMAPHORE_EMAIL_HOST: ${SEMAPHORE_EMAIL_HOST:-}
+      SEMAPHORE_EMAIL_PORT: ${SEMAPHORE_EMAIL_PORT:-587}
+      
+      # Slack/Discord webhooks (optional)
+      SEMAPHORE_TELEGRAM_CHAT: ${SEMAPHORE_TELEGRAM_CHAT:-}
+      SEMAPHORE_TELEGRAM_TOKEN: ${SEMAPHORE_TELEGRAM_TOKEN:-}
+      SEMAPHORE_SLACK_URL: ${SEMAPHORE_SLACK_URL:-}
+      
+      # Timezone
+      TZ: America/New_York
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        # Traefik Configuration
+        - "traefik.enable=true"
+        - "traefik.http.routers.semaphore.rule=Host(`antman.ciwebgroup.com`)"
+        - "traefik.http.routers.semaphore.entrypoints=websecure"
+        - "traefik.http.routers.semaphore.tls.certresolver=letsencrypt"
+        - "traefik.http.services.semaphore.loadbalancer.server.port=3000"
+        
+        # Security Middleware
+        - "traefik.http.routers.semaphore.middlewares=semaphore-security"
+        - "traefik.http.middlewares.semaphore-security.chain.middlewares=security-headers,rate-limit"
+        
+        # Health Check
+        - "traefik.http.services.semaphore.loadbalancer.healthcheck.path=/api/ping"
+        - "traefik.http.services.semaphore.loadbalancer.healthcheck.interval=10s"
+        - "traefik.http.services.semaphore.loadbalancer.healthcheck.timeout=3s"
+        
+        # Update Management
+        - "shepherd.enable=true"
+        - "com.centurylinklabs.watchtower.enable=true"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: PostgreSQL database for production (instead of BoltDB)
+  # Uncomment this section and update SEMAPHORE_DB_DIALECT to 'postgres'
+  # semaphore-postgres:
+  #   image: postgres:16-alpine
+  #   hostname: semaphore-postgres
+  #   networks:
+  #     - management
+  #   volumes:
+  #     - semaphore-postgres-data:/var/lib/postgresql/data
+  #   environment:
+  #     POSTGRES_USER: semaphore
+  #     POSTGRES_PASSWORD_FILE: /run/secrets/semaphore_db_password
+  #     POSTGRES_DB: semaphore
+  #   secrets:
+  #     - semaphore_db_password
+  #   deploy:
+  #     mode: replicated
+  #     replicas: 1
+  #     placement:
+  #       constraints:
+  #         - node.role == manager
+  #     resources:
+  #       limits:
+  #         cpus: '1'
+  #         memory: 1G
+  #       reservations:
+  #         cpus: '0.5'
+  #         memory: 512M
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U semaphore"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+volumes:
+  semaphore-data:
+    driver: local
+  semaphore-tmp:
+    driver: local
+  # semaphore-postgres-data:
+  #   driver: local
+
+networks:
+  management:
+    external: true
+  traefik-public:
+    external: true
+
+# secrets:
+#   semaphore_db_password:
+#     external: true

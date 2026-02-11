@@ -1,0 +1,133 @@
+---
+# Common role - Base system configuration for all nodes
+
+- name: Update apt cache
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install essential packages
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - software-properties-common
+      - python3
+      - python3-pip
+      - jq
+      - htop
+      - vim
+      - git
+      - rsync
+      - unzip
+      - wget
+      - net-tools
+      - dnsutils
+      - iptables
+      - nfs-common  # For storage nodes
+      - glusterfs-client  # For GlusterFS
+    state: present
+    update_cache: false
+
+- name: Set timezone
+  timezone:
+    name: UTC
+
+- name: Configure system limits
+  pam_limits:
+    domain: '*'
+    limit_type: "{{ item.type }}"
+    limit_item: "{{ item.item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { type: 'soft', item: 'nofile', value: '65536' }
+    - { type: 'hard', item: 'nofile', value: '65536' }
+    - { type: 'soft', item: 'nproc', value: '32768' }
+    - { type: 'hard', item: 'nproc', value: '32768' }
+
+- name: Apply sysctl settings
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  loop: "{{ sysctl_config | default({}) | dict2items }}"
+  when: sysctl_config is defined
+
+- name: Disable swap
+  command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+  changed_when: false
+
+- name: Remove swap from fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '^\s*[^#].*\s+swap\s+'
+    state: absent
+
+- name: Create common directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/scripts
+    - /var/log/wordpress-farm
+    - /var/backups
+
+- name: Configure UFW firewall
+  when: ansible_os_family == "Debian"
+  block:
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+    
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+    
+    - name: Configure UFW firewall rules
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment | default(omit) }}"
+      loop: "{{ firewall_rules | default([]) }}"
+      when: firewall_rules is defined
+    
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+- name: Set hostname
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Update /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1'
+    line: "127.0.1.1 {{ inventory_hostname }}"
+
+- name: Configure log rotation
+  copy:
+    content: |
+      /var/log/wordpress-farm/*.log {
+          daily
+          missingok
+          rotate 14
+          compress
+          delaycompress
+          notifempty
+          create 0640 root root
+          sharedscripts
+      }
+    dest: /etc/logrotate.d/wordpress-farm
+    mode: '0644'

@@ -1,0 +1,40 @@
+---
+# Variables specific to Cache tier nodes (Varnish + Redis)
+
+node_role: worker
+node_type: cache
+tier: cache
+
+# Node labels for service placement
+node_labels:
+  cache: "true"
+  tier: cache
+  role: worker
+
+# Varnish configuration
+varnish_memory: 4g  # 4GB for Varnish (optimized from 2GB)
+varnish_port: 80
+varnish_admin_port: 6082
+
+# Redis configuration
+redis_maxmemory: 3g
+redis_maxmemory_policy: "allkeys-lru"
+redis_port: 6379
+redis_sentinel_port: 26379
+
+# System optimizations for caching workload
+sysctl_config:
+  # Increase connection tracking
+  net.netfilter.nf_conntrack_max: 262144
+  # TCP optimizations
+  net.ipv4.tcp_tw_reuse: 1
+  net.core.somaxconn: 4096
+  # Memory for networking
+  net.core.rmem_max: 16777216
+  net.core.wmem_max: 16777216
+  net.ipv4.tcp_rmem: "4096 87380 16777216"
+  net.ipv4.tcp_wmem: "4096 65536 16777216"
+
+# Placement constraints
+placement_constraints:
+  - "node.labels.cache == true"

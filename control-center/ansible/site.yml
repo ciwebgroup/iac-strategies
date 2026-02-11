@@ -1,0 +1,141 @@
+---
+# =============================================================================
+# WORDPRESS SITE MANAGEMENT
+# =============================================================================
+# Create, delete, or manage WordPress sites
+#
+# Usage:
+#   ansible-playbook site.yml -e domain=example.com
+#   ansible-playbook site.yml -e domain=example.com -e site_id=12345
+#   ansible-playbook site.yml -e domain=example.com -e state=absent
+# =============================================================================
+
+- name: WordPress Site Management
+  hosts: swarm_managers[0]
+  gather_facts: true
+  
+  tasks:
+    - name: Set default values
+      set_fact:
+        site_id: "{{ site_id | default(ansible_date_time.epoch) }}"
+        db_name: "wp_site_{{ site_id | default(ansible_date_time.epoch) }}"
+        db_user: "wp_user_{{ site_id | default(ansible_date_time.epoch) }}"
+        db_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+        site_stack_name: "{{ domain | replace('.', '_') }}"
+        site_state: "{{ site_state | default('present') if site_state is defined else 'present' }}"
+    
+    - name: Validate required variables
+      assert:
+        that:
+          - domain is defined
+          - domain | length > 0
+        fail_msg: "domain variable is required. Use: -e domain=example.com"
+    
+    - name: Create WordPress site
+      when: site_state == 'present'
+      block:
+        - name: Create site directory
+          file:
+            path: "{{ project_root }}/sites/{{ domain }}"
+            state: directory
+            mode: '0755'
+        
+        - name: Generate site-specific compose file from template
+          template:
+            src: "{{ stacks_dir }}/wordpress-site-template.yml"
+            dest: "/tmp/{{ site_stack_name }}.yml"
+          vars:
+            SITE_ID: "{{ site_id }}"
+            DOMAIN: "{{ domain }}"
+            DB_NAME: "{{ db_name }}"
+            DB_USER: "{{ db_user }}"
+            DB_PASS: "{{ db_password }}"
+        
+        - name: Deploy WordPress site stack
+          community.docker.docker_stack:
+            name: "{{ site_stack_name }}"
+            compose:
+              - "/tmp/{{ site_stack_name }}.yml"
+            state: present
+          register: site_deploy
+        
+        - name: Save site credentials
+          copy:
+            content: |
+              Domain: {{ domain }}
+              Site ID: {{ site_id }}
+              Stack Name: {{ site_stack_name }}
+              Database: {{ db_name }}
+              DB User: {{ db_user }}
+              DB Password: {{ db_password }}
+              Created: {{ ansible_date_time.iso8601 }}
+              Created By: {{ ansible_user_id }}
+            dest: "{{ project_root }}/sites/{{ domain }}/credentials.txt"
+            mode: '0600'
+        
+        - name: Wait for site to be ready
+          command: >
+            docker service ls --filter name={{ site_stack_name }}_
+            --format '{{ '{{' }}.Replicas{{ '}}' }}'
+          register: site_replicas
+          until: site_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == site_replicas.stdout_lines | length
+          retries: 30
+          delay: 10
+          changed_when: false
+        
+        - name: Display site information
+          debug:
+            msg:
+              - "========================================"
+              - "WordPress Site Created Successfully"
+              - "========================================"
+              - "Domain: {{ domain }}"
+              - "Site ID: {{ site_id }}"
+              - "Stack: {{ site_stack_name }}"
+              - ""
+              - "Credentials saved to:"
+              - "{{ project_root }}/sites/{{ domain }}/credentials.txt"
+              - ""
+              - "Next steps:"
+              - "  1. Wait 2-3 minutes for containers to start"
+              - "  2. Visit: https://{{ domain }}"
+              - "  3. Complete WordPress installation"
+              - ""
+              - "Configure DNS with:"
+              - "  ansible-playbook dns.yml -e domain={{ domain }}"
+              - "========================================"
+    
+    - name: Delete WordPress site
+      when: site_state == 'absent'
+      block:
+        - name: Confirm deletion
+          pause:
+            prompt: "Are you sure you want to delete {{ domain }}? This cannot be undone! (yes/no)"
+          register: deletion_confirm
+          when: confirm_delete | default(false) | bool == false
+        
+        - name: Abort if not confirmed
+          fail:
+            msg: "Site deletion cancelled"
+          when:
+            - confirm_delete | default(false) | bool == false
+            - deletion_confirm.user_input | lower != 'yes'
+        
+        - name: Remove WordPress site stack
+          community.docker.docker_stack:
+            name: "{{ site_stack_name }}"
+            state: absent
+        
+        - name: Archive site credentials
+          command: >
+            mv {{ project_root }}/sites/{{ domain }}
+            {{ project_root }}/sites/{{ domain }}.deleted.{{ ansible_date_time.epoch }}
+          args:
+            removes: "{{ project_root }}/sites/{{ domain }}"
+        
+        - name: Display deletion confirmation
+          debug:
+            msg:
+              - "Site {{ domain }} has been removed"
+              - "Credentials archived to: {{ project_root }}/sites/{{ domain }}.deleted.{{ ansible_date_time.epoch }}"
+              - "Note: Database and files still exist. Manual cleanup may be needed."

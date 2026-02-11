@@ -27,14 +27,13 @@ IFS=$'\n\t'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-ENV_FILE="${SCRIPT_DIR}/.env"
+ENV_FILE="${PROJECT_ROOT}/.env"
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default values
@@ -51,15 +50,15 @@ VERIFY_SCRIPTS_DIR="${SCRIPT_DIR}/verify"
 # =============================================================================
 
 log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $*" >&2
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $*"
 }
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*" >&2
+    echo -e "${BLUE}[INFO]${NC} $*"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*" >&2
+    echo -e "${YELLOW}[WARN]${NC} $*"
 }
 
 log_error() {
@@ -67,7 +66,7 @@ log_error() {
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*" >&2
+    echo -e "${GREEN}[SUCCESS]${NC} $*"
 }
 
 die() {
@@ -107,8 +106,8 @@ check_prerequisites() {
     require_command "ssh-keygen"
     
     # Check DO CLI auth
-    if ! doctl --access-token "$DO_API_TOKEN" auth list >/dev/null 2>&1; then
-        die "DigitalOcean API token invalid or not set. Check DO_API_TOKEN in .env"
+    if ! doctl auth list >/dev/null 2>&1; then
+        die "DigitalOcean CLI not authenticated. Run: doctl auth init"
     fi
     
     log_success "All prerequisites met"
@@ -226,70 +225,6 @@ wait_for_docker() {
     
     log_error "Docker not ready on $host after $max_attempts attempts"
     return 1
-}
-
-# Install Docker on a node
-# Usage: install_docker <ip>
-install_docker() {
-    local host="$1"
-    
-    log_info "Installing Docker on $host..."
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_warn "[DRY RUN] Would install Docker on $host"
-        return 0
-    fi
-    
-    # Install Docker using official convenience script
-    ssh -o StrictHostKeyChecking=no "root@$host" 'bash -s' <<'ENDSSH'
-set -euo pipefail
-
-# Wait for cloud-init and unattended-upgrades to finish
-echo "Waiting for cloud-init to complete..."
-cloud-init status --wait || true
-
-echo "Waiting for apt locks to be released..."
-while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-      fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
-      fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-    echo "  Waiting for apt lock..."
-    sleep 5
-done
-
-# Kill any lingering unattended-upgrade processes
-systemctl stop unattended-upgrades || true
-killall -9 unattended-upgrade apt-get dpkg 2>/dev/null || true
-sleep 2
-
-# Update package index
-apt-get update -qq
-
-# Install prerequisites
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg lsb-release
-
-# Add Docker's official GPG key
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-
-# Set up the repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# Install Docker Engine
-apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# Start and enable Docker
-systemctl start docker
-systemctl enable docker
-
-# Verify Docker is running
-docker version
-ENDSSH
-    
-    log_success "Docker installed on $host"
 }
 
 # Deploy verification scripts to a node
@@ -413,14 +348,8 @@ do_create_vpc() {
     local vpc_name="${DEPLOYMENT_PROJECT}-vpc"
     local vpc_id
     
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_warn "[DRY RUN] Would create VPC: $vpc_name"
-        echo "dry-run-vpc-id"
-        return 0
-    fi
-    
     # Check if VPC already exists
-    vpc_id=$(doctl --access-token "$DO_API_TOKEN" vpcs list --format ID,Name --no-header | grep "$vpc_name" | awk '{print $1}')
+    vpc_id=$(doctl vpcs list --format ID,Name --no-header | grep "$vpc_name" | awk '{print $1}')
     
     if [[ -n "$vpc_id" ]]; then
         log_info "VPC already exists: $vpc_id"
@@ -428,12 +357,17 @@ do_create_vpc() {
         return 0
     fi
     
-    # Create VPC and parse the ID from JSON output
-    vpc_id=$(doctl --access-token "$DO_API_TOKEN" vpcs create \
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_warn "[DRY RUN] Would create VPC: $vpc_name"
+        return 0
+    fi
+    
+    vpc_id=$(doctl vpcs create \
         --name "$vpc_name" \
         --region "${DO_REGION}" \
         --ip-range "${VPC_CIDR}" \
-        --output json | jq -r '.[0].id')
+        --format ID \
+        --no-header)
     
     log_success "VPC created: $vpc_id"
     echo "$vpc_id"
@@ -451,7 +385,7 @@ do_create_ssh_key() {
     fi
     
     # Check if key exists in DO
-    if doctl --access-token "$DO_API_TOKEN" compute ssh-key list --format Name --no-header | grep -q "^${DO_SSH_KEY_NAME}$"; then
+    if doctl compute ssh-key list --format Name --no-header | grep -q "^${DO_SSH_KEY_NAME}$"; then
         log_info "SSH key already exists in DigitalOcean"
         return 0
     fi
@@ -462,7 +396,7 @@ do_create_ssh_key() {
     fi
     
     # Upload key to DO
-    doctl --access-token "$DO_API_TOKEN" compute ssh-key import "$DO_SSH_KEY_NAME" \
+    doctl compute ssh-key import "$DO_SSH_KEY_NAME" \
         --public-key-file "${key_path}.pub"
     
     log_success "SSH key uploaded: ${DO_SSH_KEY_NAME}"
@@ -482,7 +416,7 @@ do_create_droplet() {
     fi
     
     local droplet_id
-    droplet_id=$(doctl --access-token "$DO_API_TOKEN" compute droplet create "$name" \
+    droplet_id=$(doctl compute droplet create "$name" \
         --region "${DO_REGION}" \
         --size "$size" \
         --image "ubuntu-22-04-x64" \
@@ -531,20 +465,15 @@ provision_manager_nodes() {
         node_name="wp-manager-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${MANAGER_NODE_SIZE}" "manager,swarm-manager" "$vpc_id"
         
-        if [[ "$DRY_RUN" != "true" ]]; then
-            # Get IP and wait for SSH
-            local node_ip
-            node_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
-            node_ips+=("$node_ip")
-            
-            if [[ -n "$node_ip" ]]; then
-                wait_for_ssh "$node_ip"
-                install_docker "$node_ip"
-                wait_for_docker "$node_ip"
-                deploy_verify_scripts "$node_ip"
-            fi
-        else
-            node_ips+=("10.0.0.$i")
+        # Get IP and wait for SSH
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
         fi
     done
     
@@ -581,19 +510,14 @@ provision_worker_nodes() {
         node_name="wp-worker-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${WORKER_NODE_SIZE}" "worker,swarm-worker" "$vpc_id"
         
-        if [[ "$DRY_RUN" != "true" ]]; then
-            local node_ip
-            node_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
-            node_ips+=("$node_ip")
-            
-            if [[ -n "$node_ip" ]]; then
-                wait_for_ssh "$node_ip"
-                install_docker "$node_ip"
-                wait_for_docker "$node_ip"
-                deploy_verify_scripts "$node_ip"
-            fi
-        else
-            node_ips+=("10.0.1.$i")
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
         fi
     done
     
@@ -627,19 +551,14 @@ provision_cache_nodes() {
         node_name="wp-cache-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${CACHE_NODE_SIZE}" "cache,swarm-worker" "$vpc_id"
         
-        if [[ "$DRY_RUN" != "true" ]]; then
-            local node_ip
-            node_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
-            node_ips+=("$node_ip")
-            
-            if [[ -n "$node_ip" ]]; then
-                wait_for_ssh "$node_ip"
-                install_docker "$node_ip"
-                wait_for_docker "$node_ip"
-                deploy_verify_scripts "$node_ip"
-            fi
-        else
-            node_ips+=("10.0.2.$i")
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
         fi
     done
     
@@ -672,19 +591,14 @@ provision_database_nodes() {
         node_name="wp-db-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${DB_NODE_SIZE}" "database,swarm-worker" "$vpc_id"
         
-        if [[ "$DRY_RUN" != "true" ]]; then
-            local node_ip
-            node_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
-            node_ips+=("$node_ip")
-            
-            if [[ -n "$node_ip" ]]; then
-                wait_for_ssh "$node_ip"
-                install_docker "$node_ip"
-                wait_for_docker "$node_ip"
-                deploy_verify_scripts "$node_ip"
-            fi
-        else
-            node_ips+=("10.0.3.$i")
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
         fi
     done
     
@@ -719,29 +633,24 @@ provision_storage_nodes() {
         droplet_id=$(do_create_droplet "$node_name" "${STORAGE_NODE_SIZE}" "storage,swarm-worker" "$vpc_id")
         
         # Attach block storage
-        if [[ "$DRY_RUN" != "true" && -n "$droplet_id" ]]; then
+        if [[ -n "$droplet_id" ]]; then
             log_info "Attaching ${STORAGE_VOLUME_SIZE}GB volume to $node_name..."
-            doctl --access-token "$DO_API_TOKEN" compute volume create "${node_name}-vol" \
+            doctl compute volume create "${node_name}-vol" \
                 --region "${DO_REGION}" \
                 --size "${STORAGE_VOLUME_SIZE}gb" \
                 --fs-type ext4
             
-            doctl --access-token "$DO_API_TOKEN" compute volume-action attach "${node_name}-vol" "$droplet_id"
+            doctl compute volume-action attach "${node_name}-vol" "$droplet_id"
         fi
         
-        if [[ "$DRY_RUN" != "true" ]]; then
-            local node_ip
-            node_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
-            node_ips+=("$node_ip")
-            
-            if [[ -n "$node_ip" ]]; then
-                wait_for_ssh "$node_ip"
-                install_docker "$node_ip"
-                wait_for_docker "$node_ip"
-                deploy_verify_scripts "$node_ip"
-            fi
-        else
-            node_ips+=("10.0.4.$i")
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
         fi
     done
     
@@ -778,19 +687,14 @@ provision_monitor_nodes() {
         node_name="wp-monitor-$(printf "%02d" "$i")"
         do_create_droplet "$node_name" "${MONITOR_NODE_SIZE}" "monitor,swarm-worker,ops" "$vpc_id"
         
-        if [[ "$DRY_RUN" != "true" ]]; then
-            local node_ip
-            node_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
-            node_ips+=("$node_ip")
-            
-            if [[ -n "$node_ip" ]]; then
-                wait_for_ssh "$node_ip"
-                install_docker "$node_ip"
-                wait_for_docker "$node_ip"
-                deploy_verify_scripts "$node_ip"
-            fi
-        else
-            node_ips+=("10.0.5.$i")
+        local node_ip
+        node_ip=$(doctl compute droplet list --format Name,PublicIPv4 --no-header | grep "^${node_name}" | awk '{print $2}')
+        node_ips+=("$node_ip")
+        
+        if [[ "$DRY_RUN" != "true" && -n "$node_ip" ]]; then
+            wait_for_ssh "$node_ip"
+            wait_for_docker "$node_ip"
+            deploy_verify_scripts "$node_ip"
         fi
     done
     
@@ -819,7 +723,7 @@ init_swarm() {
     log "Initializing Docker Swarm..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     if [[ -z "$manager_ip" ]]; then
         die "No manager nodes found. Provision manager nodes first."
@@ -872,9 +776,9 @@ join_managers() {
     log "Joining additional manager nodes to Swarm..."
     
     local lead_manager
-    lead_manager=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format Name,PublicIPv4 --no-header | head -n1 | awk '{print $2}')
+    lead_manager=$(doctl compute droplet list --tag-name "swarm-manager" --format Name,PublicIPv4 --no-header | head -n1 | awk '{print $2}')
     
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format Name,PublicIPv4 --no-header | tail -n +2 | while read -r name ip; do
+    doctl compute droplet list --tag-name "swarm-manager" --format Name,PublicIPv4 --no-header | tail -n +2 | while read -r name ip; do
         log_info "Joining $name to Swarm as manager..."
         
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -908,9 +812,9 @@ join_workers() {
     log "Joining worker nodes to Swarm..."
     
     local lead_manager
-    lead_manager=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    lead_manager=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-worker" --format Name,PublicIPv4 --no-header | while read -r name ip; do
+    doctl compute droplet list --tag-name "swarm-worker" --format Name,PublicIPv4 --no-header | while read -r name ip; do
         log_info "Joining $name to Swarm as worker..."
         
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -946,10 +850,10 @@ label_nodes() {
     log "Labeling nodes..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     # Label cache nodes
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "cache" --format Name --no-header | while read -r name; do
+    doctl compute droplet list --tag-name "cache" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as cache node..."
         ssh -n "root@$manager_ip" "docker node update --label-add cache=true $name"
         
@@ -960,7 +864,7 @@ label_nodes() {
     done
     
     # Label database nodes
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "database" --format Name --no-header | while read -r name; do
+    doctl compute droplet list --tag-name "database" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as database node..."
         ssh -n "root@$manager_ip" "docker node update --label-add db=true $name"
         
@@ -970,19 +874,19 @@ label_nodes() {
     done
     
     # Label storage nodes
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "storage" --format Name --no-header | while read -r name; do
+    doctl compute droplet list --tag-name "storage" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as storage node..."
         ssh -n "root@$manager_ip" "docker node update --label-add storage=true $name"
     done
     
     # Label worker nodes
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "worker" --format Name --no-header | while read -r name; do
+    doctl compute droplet list --tag-name "worker" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as app node..."
         ssh -n "root@$manager_ip" "docker node update --label-add app=true $name"
     done
     
     # Label monitoring nodes
-    doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "ops" --format Name --no-header | while read -r name; do
+    doctl compute droplet list --tag-name "ops" --format Name --no-header | while read -r name; do
         log_info "Labeling $name as ops node..."
         ssh -n "root@$manager_ip" "docker node update --label-add ops=true $name"
     done
@@ -1010,7 +914,7 @@ create_networks() {
     log "Creating Docker overlay networks..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     local networks=(
         "traefik-public"
@@ -1059,7 +963,7 @@ deploy_stack() {
     log "Deploying stack: $stack_name..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     if [[ "$DRY_RUN" == "true" ]]; then
         log_warn "[DRY RUN] Would deploy stack $stack_name from $compose_file"
@@ -1084,7 +988,7 @@ deploy_all_stacks() {
     
     local stacks_dir="${PROJECT_ROOT}/docker-compose-examples"
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     # Deploy in dependency order with verification
     
@@ -1248,7 +1152,7 @@ backup_now() {
     log "Running backups: $backup_type..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     case "$backup_type" in
         database|db)
@@ -1273,7 +1177,7 @@ backup_cleanup() {
     log "Running backup cleanup..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     if [[ "$DRY_RUN" == "true" ]]; then
         log_warn "Running cleanup in dry-run mode..."
@@ -1309,7 +1213,7 @@ create_wordpress_site() {
     # Create WordPress site stack
     local site_stack="${domain//./_}"
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     # Generate site-specific compose file from template
     sed -e "s/{SITE_ID}/$site_id/g" \
@@ -1345,7 +1249,7 @@ health_check() {
     log "Running health checks..."
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     # Check Swarm status
     log_info "Checking Swarm status..."
@@ -1375,70 +1279,11 @@ backup_database() {
     fi
     
     local manager_ip
-    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
     
     ssh "root@$manager_ip" "docker exec \$(docker ps -qf 'name=database_backup') /backup.sh"
     
     log_success "Database backup complete"
-}
-
-# =============================================================================
-# AUTHENTICATION & TESTING
-# =============================================================================
-
-test_auth() {
-    log "Testing DigitalOcean API authentication..."
-    
-    log_info "API Token: ${DO_API_TOKEN:0:20}..." 
-    log_info "Region: ${DO_REGION}"
-    
-    # Test API access directly with the token from .env
-    log_info "Testing API access with DO_API_TOKEN..."
-    if ! doctl --access-token "$DO_API_TOKEN" account get >/dev/null 2>&1; then
-        log_error "Failed to access DigitalOcean API"
-        log_error "Your DO_API_TOKEN may be invalid or expired"
-        log_info "Get a new token from: https://cloud.digitalocean.com/account/api/tokens"
-        return 1
-    fi
-    
-    log_success "DigitalOcean API access: OK"
-    
-    # Show account info
-    log_info "Account details:"
-    doctl --access-token "$DO_API_TOKEN" account get
-    
-    # Test region availability
-    log_info "Checking region '${DO_REGION}'..."
-    if ! doctl --access-token "$DO_API_TOKEN" compute region list --format Slug,Name --no-header | grep -q "^${DO_REGION}"; then
-        log_error "Region '${DO_REGION}' not found"
-        log_info "Available regions:"
-        doctl --access-token "$DO_API_TOKEN" compute region list --format Slug,Name,Available
-        return 1
-    fi
-    
-    log_success "Region '${DO_REGION}': OK"
-    
-    # Show current resources
-    log_info "Current resources in region '${DO_REGION}':"
-    echo ""
-    
-    local droplet_count
-    droplet_count=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --region "${DO_REGION}" --format ID --no-header 2>/dev/null | wc -l)
-    log_info "  Droplets: $droplet_count"
-    
-    local vpc_count
-    vpc_count=$(doctl --access-token "$DO_API_TOKEN" vpcs list --format ID --no-header 2>/dev/null | wc -l)
-    log_info "  VPCs: $vpc_count"
-    
-    local volume_count
-    volume_count=$(doctl --access-token "$DO_API_TOKEN" compute volume list --region "${DO_REGION}" --format ID --no-header 2>/dev/null | wc -l)
-    log_info "  Volumes: $volume_count"
-    
-    echo ""
-    log_success "All authentication tests passed!"
-    log_info "You're ready to provision infrastructure."
-    
-    return 0
 }
 
 # =============================================================================
@@ -1581,8 +1426,6 @@ WordPress Farm Infrastructure Management
 Usage: $0 [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
 
 Commands:
-  test-auth           Test DigitalOcean API authentication and show account info
-  
   provision           Provision all infrastructure nodes
     --managers        Provision manager nodes only
     --workers         Provision worker nodes only
@@ -1624,9 +1467,6 @@ Global Options:
   --help              Show this help message
 
 Examples:
-  # Test authentication first
-  $0 test-auth
-  
   # Full deployment with interactive verification
   $0 provision --all
   $0 init-swarm
@@ -1705,10 +1545,6 @@ main() {
     
     # Execute command
     case "$command" in
-        test-auth)
-            test_auth
-            ;;
-        
         provision)
             case "${1:-all}" in
                 --managers) provision_manager_nodes ;;
@@ -1785,7 +1621,7 @@ main() {
                 --verify)
                     log "Checking backup health..."
                     local manager_ip
-                    manager_ip=$(doctl --access-token "$DO_API_TOKEN" compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
+                    manager_ip=$(doctl compute droplet list --tag-name "swarm-manager" --format PublicIPv4 --no-header | head -n1)
                     ssh "root@$manager_ip" "docker exec \$(docker ps -qf 'name=backup_backup-monitor') /scripts/backup-monitor.sh --check-once"
                     ;;
                 *)

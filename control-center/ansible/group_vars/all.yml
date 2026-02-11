@@ -1,0 +1,145 @@
+---
+# Global Variables for All Hosts
+# These variables are loaded from .env file in the parent directory
+
+# =============================================================================
+# PROJECT CONFIGURATION
+# =============================================================================
+deployment_project: "{{ lookup('env', 'DEPLOYMENT_PROJECT') | default('wordpress-farm', true) }}"
+deployment_environment: production
+
+# =============================================================================
+# ANSIBLE CONFIGURATION
+# =============================================================================
+ansible_user: root
+ansible_ssh_private_key_file: "~/.ssh/{{ lookup('env', 'DO_SSH_KEY_NAME') | default('wordpress-farm-key', true) }}"
+ansible_python_interpreter: /usr/bin/python3
+
+# =============================================================================
+# DIGITALOCEAN CONFIGURATION
+# =============================================================================
+do_api_token: "{{ lookup('env', 'DO_API_TOKEN') }}"
+do_region: "{{ lookup('env', 'DO_REGION') | default('nyc3', true) }}"
+do_ssh_key_name: "{{ lookup('env', 'DO_SSH_KEY_NAME') | default('wordpress-farm-key', true) }}"
+vpc_cidr: "{{ lookup('env', 'VPC_CIDR') | default('10.10.0.0/16', true) }}"
+
+# DigitalOcean Spaces
+do_spaces_bucket: "{{ lookup('env', 'DO_SPACES_BUCKET') | default('wordpress-farm-backups', true) }}"
+do_spaces_region: "{{ lookup('env', 'DO_SPACES_REGION') | default('nyc3', true) }}"
+do_spaces_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') }}"
+do_spaces_secret_key: "{{ lookup('env', 'S3_SECRET_KEY') }}"
+
+# =============================================================================
+# NODE SIZES
+# =============================================================================
+manager_node_size: "{{ lookup('env', 'MANAGER_NODE_SIZE') | default('s-2vcpu-4gb', true) }}"
+worker_node_size: "{{ lookup('env', 'WORKER_NODE_SIZE') | default('s-4vcpu-8gb', true) }}"
+cache_node_size: "{{ lookup('env', 'CACHE_NODE_SIZE') | default('s-2vcpu-4gb', true) }}"
+database_node_size: "{{ lookup('env', 'DB_NODE_SIZE') | default('s-4vcpu-8gb', true) }}"
+storage_node_size: "{{ lookup('env', 'STORAGE_NODE_SIZE') | default('s-2vcpu-4gb', true) }}"
+monitor_node_size: "{{ lookup('env', 'MONITOR_NODE_SIZE') | default('s-2vcpu-4gb', true) }}"
+
+# Node counts
+manager_node_count: "{{ lookup('env', 'MANAGER_NODE_COUNT') | default('3', true) | int }}"
+worker_node_count: "{{ lookup('env', 'WORKER_NODE_COUNT') | default('20', true) | int }}"
+cache_node_count: "{{ lookup('env', 'CACHE_NODE_COUNT') | default('3', true) | int }}"
+database_node_count: "{{ lookup('env', 'DB_NODE_COUNT') | default('3', true) | int }}"
+storage_node_count: "{{ lookup('env', 'STORAGE_NODE_COUNT') | default('2', true) | int }}"
+monitor_node_count: "{{ lookup('env', 'MONITOR_NODE_COUNT') | default('2', true) | int }}"
+
+storage_volume_size: "{{ lookup('env', 'STORAGE_VOLUME_SIZE') | default('500', true) | int }}"
+
+# =============================================================================
+# DOCKER CONFIGURATION
+# =============================================================================
+docker_version: "24.0"
+docker_compose_version: "2.23.0"
+docker_users:
+  - "{{ ansible_user }}"
+
+# Docker daemon configuration
+docker_daemon_config:
+  log-driver: "json-file"
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  storage-driver: "overlay2"
+  metrics-addr: "0.0.0.0:9323"
+  experimental: false
+
+# =============================================================================
+# DOCKER SWARM CONFIGURATION
+# =============================================================================
+swarm_manager_token: "{{ lookup('env', 'SWARM_MANAGER_TOKEN') }}"
+swarm_worker_token: "{{ lookup('env', 'SWARM_WORKER_TOKEN') }}"
+
+# Overlay networks to create
+swarm_networks:
+  - traefik-public
+  - wordpress-net
+  - database-net
+  - storage-net
+  - cache-net
+  - observability-net
+  - crowdsec-net
+  - management-net
+  - contractor-net
+
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+mysql_root_password: "{{ lookup('env', 'MYSQL_ROOT_PASSWORD') }}"
+mysql_host: "{{ lookup('env', 'MYSQL_HOST') | default('proxysql', true) }}"
+mysql_port: "{{ lookup('env', 'MYSQL_PORT') | default('6033', true) }}"
+
+# =============================================================================
+# BACKUP CONFIGURATION
+# =============================================================================
+s3_endpoint: "{{ lookup('env', 'S3_ENDPOINT') | default('https://nyc3.digitaloceanspaces.com', true) }}"
+s3_bucket: "{{ lookup('env', 'S3_BUCKET') | default('wordpress-farm-backups', true) }}"
+s3_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') }}"
+s3_secret_key: "{{ lookup('env', 'S3_SECRET_KEY') }}"
+s3_prefix_database: "{{ lookup('env', 'S3_PREFIX') | default('database-backups', true) }}"
+s3_prefix_wordpress: "wordpress-files"
+
+backup_retention_days: "{{ lookup('env', 'KEEP_ALL_DAYS') | default('14', true) | int }}"
+backup_compression: "{{ lookup('env', 'COMPRESSION') | default('gzip', true) }}"
+backup_encryption_enabled: "{{ lookup('env', 'ENCRYPTION_ENABLED') | default('true', true) | bool }}"
+
+# =============================================================================
+# CLOUDFLARE CONFIGURATION
+# =============================================================================
+cloudflare_api_token: "{{ lookup('env', 'CF_API_TOKEN') }}"
+cloudflare_zones_config: "{{ lookup('env', 'CF_ZONES_CONFIG') | default('../scripts/cloudflare-zones.yml', true) }}"
+
+# =============================================================================
+# MONITORING & ALERTING
+# =============================================================================
+alertmanager_url: "{{ lookup('env', 'ALERTMANAGER_URL') | default('http://alertmanager:9093', true) }}"
+prometheus_pushgateway_url: "{{ lookup('env', 'PUSHGATEWAY_URL') | default('http://prometheus-pushgateway:9091', true) }}"
+slack_webhook_url: "{{ lookup('env', 'NOTIFICATION_URL') }}"
+
+# =============================================================================
+# PATHS
+# =============================================================================
+project_root: /var/opt/wordpress-farm
+config_dir: "{{ project_root }}/configs"
+scripts_dir: "{{ project_root }}/scripts"
+stacks_dir: "{{ project_root }}/stacks"
+backup_dir: /var/backups/wordpress-farm
+wordpress_data_path: /wordpress-data
+
+# =============================================================================
+# VERIFICATION SCRIPTS
+# =============================================================================
+verify_scripts_dest: /opt/verify
+verify_scripts_src: "{{ playbook_dir }}/../scripts/verify"
+
+# =============================================================================
+# TIMEOUTS & RETRIES
+# =============================================================================
+ssh_wait_timeout: 300
+docker_wait_timeout: 300
+stack_deploy_timeout: 600
+health_check_retries: 30
+health_check_delay: 10

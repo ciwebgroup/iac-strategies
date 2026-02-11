@@ -1,0 +1,449 @@
+---
+# =============================================================================
+# DEPLOY WORDPRESS FARM - FULL STACK DEPLOYMENT
+# =============================================================================
+# This playbook configures provisioned infrastructure and deploys all services:
+# - Base system configuration
+# - Docker installation
+# - Docker Swarm initialization
+# - Node labeling
+# - Network creation
+# - Stack deployment (Traefik, Cache, Database, Monitoring, etc.)
+#
+# Usage:
+#   ansible-playbook deploy.yml
+#   ansible-playbook deploy.yml --tags swarm
+#   ansible-playbook deploy.yml --tags stacks
+#   ansible-playbook deploy.yml --limit swarm_managers
+#
+# Prerequisites:
+#   - Infrastructure provisioned (provision.yml completed)
+#   - SSH access to all nodes
+#   - Dynamic inventory configured
+# =============================================================================
+
+- name: Pre-deployment Checks
+  hosts: all_nodes
+  gather_facts: false
+  tags: [always]
+  
+  tasks:
+    - name: Wait for nodes to be reachable
+      wait_for_connection:
+        timeout: "{{ ssh_wait_timeout }}"
+        delay: 5
+    
+    - name: Gather facts
+      setup:
+
+
+- name: Base System Configuration
+  hosts: all_nodes
+  tags: [base, system]
+  roles:
+    - common
+
+
+- name: Install Docker
+  hosts: all_nodes
+  tags: [docker]
+  roles:
+    - docker
+
+
+- name: Initialize Docker Swarm
+  hosts: swarm_managers[0]
+  tags: [swarm, init]
+  tasks:
+    - name: Check if Swarm is already initialized
+      command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state
+      changed_when: false
+      failed_when: false
+    
+    - name: Initialize Docker Swarm
+      command: >
+        docker swarm init
+        --advertise-addr {{ private_ip | default(ansible_default_ipv4.address) }}
+      when: swarm_state.stdout != 'active'
+      register: swarm_init
+    
+    - name: Get manager join token
+      command: docker swarm join-token manager -q
+      register: manager_token
+      changed_when: false
+    
+    - name: Get worker join token
+      command: docker swarm join-token worker -q
+      register: worker_token
+      changed_when: false
+    
+    - name: Save join tokens
+      set_fact:
+        swarm_manager_token: "{{ manager_token.stdout }}"
+        swarm_worker_token: "{{ worker_token.stdout }}"
+        swarm_manager_ip: "{{ private_ip | default(ansible_default_ipv4.address) }}"
+      delegate_to: localhost
+      delegate_facts: true
+    
+    - name: Display Swarm tokens
+      debug:
+        msg:
+          - "Swarm initialized successfully"
+          - "Manager IP: {{ private_ip | default(ansible_default_ipv4.address) }}"
+          - "Manager Token: {{ manager_token.stdout }}"
+          - "Worker Token: {{ worker_token.stdout }}"
+
+
+- name: Join Additional Managers to Swarm
+  hosts: swarm_managers[1:]
+  tags: [swarm, join, managers]
+  tasks:
+    - name: Check if already in Swarm
+      command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: node_swarm_state
+      changed_when: false
+      failed_when: false
+    
+    - name: Join as manager
+      command: >
+        docker swarm join
+        --token {{ hostvars['localhost']['swarm_manager_token'] }}
+        {{ hostvars['localhost']['swarm_manager_ip'] }}:2377
+      when: node_swarm_state.stdout != 'active'
+
+
+- name: Join Workers to Swarm
+  hosts: swarm_workers
+  tags: [swarm, join, workers]
+  tasks:
+    - name: Check if already in Swarm
+      command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: node_swarm_state
+      changed_when: false
+      failed_when: false
+    
+    - name: Join as worker
+      command: >
+        docker swarm join
+        --token {{ hostvars['localhost']['swarm_worker_token'] }}
+        {{ hostvars['localhost']['swarm_manager_ip'] }}:2377
+      when: node_swarm_state.stdout != 'active'
+
+
+- name: Apply Node Labels
+  hosts: swarm_managers[0]
+  tags: [swarm, labels]
+  tasks:
+    - name: Get list of all nodes
+      command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
+      register: swarm_nodes
+      changed_when: false
+    
+    - name: Label cache nodes
+      command: >
+        docker node update
+        --label-add cache=true
+        --label-add cache-node={{ item | regex_replace('^.*-(\d+)$', '\1') }}
+        --label-add tier=cache
+        {{ item }}
+      loop: "{{ groups['cache_nodes'] | map('extract', hostvars, 'inventory_hostname') | list }}"
+      when: item in swarm_nodes.stdout_lines
+    
+    - name: Label database nodes
+      command: >
+        docker node update
+        --label-add db=true
+        --label-add db-node={{ item | regex_replace('^.*-(\d+)$', '\1') }}
+        --label-add tier=database
+        {{ item }}
+      loop: "{{ groups['database_nodes'] | map('extract', hostvars, 'inventory_hostname') | list }}"
+      when: item in swarm_nodes.stdout_lines
+    
+    - name: Label storage nodes
+      command: >
+        docker node update
+        --label-add storage=true
+        --label-add tier=storage
+        {{ item }}
+      loop: "{{ groups['storage_nodes'] | map('extract', hostvars, 'inventory_hostname') | list }}"
+      when: item in swarm_nodes.stdout_lines
+    
+    - name: Label worker nodes
+      command: >
+        docker node update
+        --label-add app=true
+        --label-add tier=application
+        {{ item }}
+      loop: "{{ groups['worker_nodes'] | map('extract', hostvars, 'inventory_hostname') | list }}"
+      when: item in swarm_nodes.stdout_lines
+    
+    - name: Label monitoring nodes
+      command: >
+        docker node update
+        --label-add ops=true
+        --label-add tier=observability
+        {{ item }}
+      loop: "{{ groups['monitor_nodes'] | map('extract', hostvars, 'inventory_hostname') | list }}"
+      when: item in swarm_nodes.stdout_lines
+    
+    - name: Verify node labels
+      command: docker node inspect {{ item }} --format '{{ '{{' }}.Spec.Labels{{ '}}' }}'
+      loop: "{{ swarm_nodes.stdout_lines }}"
+      register: node_labels
+      changed_when: false
+    
+    - name: Display node labels
+      debug:
+        msg: "{{ item.item }}: {{ item.stdout }}"
+      loop: "{{ node_labels.results }}"
+
+
+- name: Create Docker Networks
+  hosts: swarm_managers[0]
+  tags: [networks]
+  tasks:
+    - name: Create overlay networks
+      shell: docker network create --driver overlay --attachable {{ item }} || true
+      loop: "{{ swarm_networks }}"
+      register: network_creation
+      changed_when: "'already exists' not in network_creation.stderr"
+
+
+- name: Deploy Verification Scripts
+  hosts: all_nodes
+  tags: [verify, scripts]
+  tasks:
+    - name: Create verify directory
+      file:
+        path: "{{ verify_scripts_dest }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Copy verification scripts
+      copy:
+        src: "{{ item }}"
+        dest: "{{ verify_scripts_dest }}/"
+        mode: '0755'
+      with_fileglob:
+        - "{{ verify_scripts_src }}/*.sh"
+
+
+- name: Configure Infrastructure Directories
+  hosts: swarm_managers[0]
+  tags: [config, dirs]
+  tasks:
+    - name: Create infrastructure directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ project_root }}"
+        - "{{ config_dir }}"
+        - "{{ stacks_dir }}"
+        - "{{ scripts_dir }}"
+    
+    - name: Copy configuration files
+      synchronize:
+        src: "{{ playbook_dir }}/../configs/"
+        dest: "{{ config_dir }}/"
+        recursive: true
+        delete: false
+    
+    - name: Copy Docker Compose stack files
+      synchronize:
+        src: "{{ playbook_dir }}/../docker-compose-examples/"
+        dest: "{{ stacks_dir }}/"
+        recursive: true
+        delete: false
+
+
+- name: Deploy Traefik Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, traefik]
+  tasks:
+    - name: Deploy Traefik
+      shell: docker stack deploy -c {{ stacks_dir }}/traefik-stack.yml traefik
+      register: traefik_deploy
+      changed_when: "'Creating service' in traefik_deploy.stdout or 'Updating service' in traefik_deploy.stdout"
+    
+    - name: Wait for Traefik to be ready
+      command: >
+        docker service ls --filter name=traefik_traefik
+        --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: traefik_replicas
+      until: traefik_replicas.stdout is match('^\d+/\d+$') and traefik_replicas.stdout.split('/')[0] == traefik_replicas.stdout.split('/')[1]
+      retries: 30
+      delay: 10
+      changed_when: false
+
+
+- name: Deploy Cache Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, cache]
+  tasks:
+    - name: Deploy Cache (Varnish + Redis)
+      community.docker.docker_stack:
+        name: cache
+        compose:
+          - "{{ stacks_dir }}/cache-stack.yml"
+        state: present
+    
+    - name: Wait for Cache stack to be ready
+      command: >
+        docker stack services cache --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: cache_replicas
+      until: cache_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == cache_replicas.stdout_lines | length
+      retries: 30
+      delay: 10
+      changed_when: false
+
+
+- name: Deploy Database Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, database]
+  tasks:
+    - name: Deploy Database (MariaDB Galera + ProxySQL)
+      community.docker.docker_stack:
+        name: database
+        compose:
+          - "{{ stacks_dir }}/database-stack.yml"
+        state: present
+    
+    - name: Wait for Database stack to be ready
+      command: >
+        docker stack services database --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: db_replicas
+      until: db_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == db_replicas.stdout_lines | length
+      retries: 60
+      delay: 10
+      changed_when: false
+
+
+- name: Deploy Monitoring Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, monitoring]
+  tasks:
+    - name: Deploy Monitoring (Prometheus, Grafana, Loki, Tempo)
+      community.docker.docker_stack:
+        name: monitoring
+        compose:
+          - "{{ stacks_dir }}/monitoring-stack.yml"
+        state: present
+    
+    - name: Wait for Monitoring stack to be ready
+      command: >
+        docker stack services monitoring --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: monitoring_replicas
+      until: monitoring_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == monitoring_replicas.stdout_lines | length
+      retries: 60
+      delay: 10
+      changed_when: false
+
+
+- name: Deploy Management Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, management]
+  tasks:
+    - name: Deploy Management (Portainer)
+      community.docker.docker_stack:
+        name: management
+        compose:
+          - "{{ stacks_dir }}/management-stack.yml"
+        state: present
+    
+    - name: Wait for Management stack to be ready
+      command: >
+        docker stack services management --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: mgmt_replicas
+      until: mgmt_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == mgmt_replicas.stdout_lines | length
+      retries: 30
+      delay: 10
+      changed_when: false
+
+
+- name: Deploy Backup Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, backup]
+  tasks:
+    - name: Deploy Backup services
+      community.docker.docker_stack:
+        name: backup
+        compose:
+          - "{{ stacks_dir }}/backup-stack.yml"
+        state: present
+    
+    - name: Wait for Backup stack to be ready
+      command: >
+        docker stack services backup --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: backup_replicas
+      until: backup_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == backup_replicas.stdout_lines | length
+      retries: 30
+      delay: 10
+      changed_when: false
+
+
+- name: Deploy Contractor Access Stack
+  hosts: swarm_managers[0]
+  tags: [stacks, contractor]
+  tasks:
+    - name: Deploy Contractor portal
+      community.docker.docker_stack:
+        name: contractor
+        compose:
+          - "{{ stacks_dir }}/contractor-access-stack.yml"
+        state: present
+    
+    - name: Wait for Contractor stack to be ready
+      command: >
+        docker stack services contractor --format '{{ '{{' }}.Replicas{{ '}}' }}'
+      register: contractor_replicas
+      until: contractor_replicas.stdout_lines | select('match', '^\d+/\d+$') | list | length == contractor_replicas.stdout_lines | length
+      retries: 30
+      delay: 10
+      changed_when: false
+
+
+- name: Deployment Summary
+  hosts: swarm_managers[0]
+  tags: [always]
+  tasks:
+    - name: Get Swarm status
+      command: docker node ls
+      register: swarm_status
+      changed_when: false
+    
+    - name: Get all stacks
+      command: docker stack ls
+      register: stack_list
+      changed_when: false
+    
+    - name: Get all services
+      command: docker service ls
+      register: service_list
+      changed_when: false
+    
+    - name: Display deployment summary
+      debug:
+        msg:
+          - "========================================"
+          - "WordPress Farm Deployment Complete"
+          - "========================================"
+          - ""
+          - "SWARM STATUS:"
+          - "{{ swarm_status.stdout }}"
+          - ""
+          - "DEPLOYED STACKS:"
+          - "{{ stack_list.stdout }}"
+          - ""
+          - "SERVICES:"
+          - "{{ service_list.stdout }}"
+          - ""
+          - "========================================"
+          - "Next steps:"
+          - "  1. Verify health: ansible-playbook health.yml"
+          - "  2. Create WordPress site: ansible-playbook site.yml -e domain=example.com"
+          - "  3. Access Grafana: https://grafana.yourdomain.com"
+          - "  4. Access Portainer: https://portainer.yourdomain.com"
+          - "========================================"

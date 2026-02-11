@@ -1,0 +1,41 @@
+---
+# Variables specific to Database tier nodes (MySQL/MariaDB Galera)
+
+node_role: worker
+node_type: database
+tier: database
+
+# Node labels for service placement
+node_labels:
+  db: "true"
+  tier: database
+  role: worker
+
+# MariaDB Galera configuration
+galera_cluster_name: "wordpress_galera_cluster"
+galera_port: 3306
+galera_ist_port: 4568
+galera_sst_port: 4444
+
+# ProxySQL configuration
+proxysql_admin_port: 6032
+proxysql_port: 6033
+
+# System optimizations for database workload
+sysctl_config:
+  # InnoDB optimizations
+  vm.swappiness: 1
+  # File system
+  fs.file-max: 65536
+  # Network buffers for replication
+  net.core.rmem_max: 16777216
+  net.core.wmem_max: 16777216
+  net.ipv4.tcp_rmem: "4096 87380 16777216"
+  net.ipv4.tcp_wmem: "4096 65536 16777216"
+
+# Placement constraints
+placement_constraints:
+  - "node.labels.db == true"
+
+# I/O scheduler optimization for database workloads
+io_scheduler: deadline

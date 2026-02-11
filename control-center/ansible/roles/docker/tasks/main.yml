@@ -1,0 +1,85 @@
+---
+# Docker role - Install and configure Docker
+
+- name: Check if Docker is already installed
+  command: docker --version
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker
+  when: docker_check.rc != 0
+  block:
+    - name: Remove old Docker versions
+      apt:
+        name:
+          - docker
+          - docker-engine
+          - docker.io
+          - containerd
+          - runc
+        state: absent
+    
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+    
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+    
+    - name: Install Docker packages
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+- name: Ensure Docker is started and enabled
+  systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add users to docker group
+  user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_users }}"
+  when: docker_users is defined
+
+- name: Create Docker daemon configuration
+  copy:
+    content: "{{ docker_daemon_config | to_nice_json }}"
+    dest: /etc/docker/daemon.json
+    mode: '0644'
+  notify: Restart Docker
+
+- name: Install Docker Python library
+  pip:
+    name:
+      - docker
+      - docker-compose
+    state: present
+    executable: pip3
+
+- name: Ensure Docker daemon.json is valid JSON
+  shell: python3 -m json.tool /etc/docker/daemon.json > /tmp/daemon.json.valid && mv /tmp/daemon.json.valid /etc/docker/daemon.json
+  args:
+    warn: false
+  changed_when: false
+  failed_when: false
+
+- name: Verify Docker installation
+  command: docker run --rm hello-world
+  register: docker_test
+  changed_when: false
+  failed_when: docker_test.rc != 0

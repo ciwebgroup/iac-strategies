@@ -2,17 +2,17 @@ version: '3.8'
 
 services:
   traefik:
-    image: traefik:v3.0
+    image: traefik:v3.6.7
     command:
       # API and Dashboard
       - --api.dashboard=true
       - --api.insecure=false
       
       # Docker Swarm Provider
-      - --providers.docker=true
-      - --providers.docker.swarmMode=true
-      - --providers.docker.exposedByDefault=false
-      - --providers.docker.network=traefik-public
+      - --providers.swarm=true
+      - --providers.swarm.exposedByDefault=false
+      - --providers.swarm.network=traefik-public
+      - --providers.swarm.endpoint=unix:///var/run/docker.sock
       
       # Entrypoints
       - --entrypoints.web.address=:80
@@ -23,10 +23,11 @@ services:
       - --entrypoints.websecure.http.tls.certResolver=letsencrypt
       - --entrypoints.websecure.http3=true
       
-      # Let's Encrypt
-      - --certificatesresolvers.letsencrypt.acme.email=admin@yourdomain.com
+      # Let's Encrypt (HTTP-01 challenge)
+      - --certificatesresolvers.letsencrypt.acme.email=chris@ciwebgroup.com
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
       
       # Metrics
       - --metrics.prometheus=true
@@ -58,10 +59,10 @@ services:
       - traefik-logs:/var/log/traefik
     networks:
       - traefik-public
-      - monitoring
+      - observability-net
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 1
       placement:
         constraints:
           - node.role == manager
@@ -78,14 +79,14 @@ services:
       labels:
         # Dashboard
         - "traefik.enable=true"
-        - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.yourdomain.com`)"
+        - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.ciwebgroup.com`)"
         - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
         - "traefik.http.routers.traefik-dashboard.service=api@internal"
+        - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
         - "traefik.http.routers.traefik-dashboard.middlewares=auth"
-        - "traefik.http.services.traefik-dashboard.loadbalancer.server.port=8080"
         
         # Basic Auth (generate with: htpasswd -nb admin password)
-        - "traefik.http.middlewares.auth.basicauth.users=admin:$$apr1$$..."
+        - "traefik.http.middlewares.auth.basicauth.users=admin:$$apr1$$juizApUz$$bKfhub.MwA7Uh3lwZW2t8/"
         
         # Security Headers Middleware
         - "traefik.http.middlewares.security-headers.headers.customResponseHeaders.X-Robots-Tag=noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex"
@@ -185,7 +186,7 @@ volumes:
 networks:
   traefik-public:
     external: true
-  monitoring:
+  observability-net:
     external: true
 
 

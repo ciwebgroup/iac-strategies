@@ -37,7 +37,7 @@ services:
           memory: 2G
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.prometheus.rule=Host(`prometheus.yourdomain.com`)"
+        - "traefik.http.routers.prometheus.rule=Host(`prometheus.ciwebgroup.com`)"
         - "traefik.http.routers.prometheus.entrypoints=websecure"
         - "traefik.http.routers.prometheus.middlewares=auth"
         - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
@@ -103,7 +103,7 @@ services:
           memory: 2G
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.loki.rule=Host(`loki.yourdomain.com`)"
+        - "traefik.http.routers.loki.rule=Host(`loki.ciwebgroup.com`)"
         - "traefik.http.routers.loki.entrypoints=websecure"
         - "traefik.http.routers.loki.middlewares=auth"
         - "traefik.http.services.loki.loadbalancer.server.port=3100"
@@ -161,7 +161,7 @@ services:
           memory: 2G
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.tempo.rule=Host(`tempo.yourdomain.com`)"
+        - "traefik.http.routers.tempo.rule=Host(`tempo.ciwebgroup.com`)"
         - "traefik.http.routers.tempo.entrypoints=websecure"
         - "traefik.http.routers.tempo.middlewares=auth"
         - "traefik.http.services.tempo.loadbalancer.server.port=3200"
@@ -188,12 +188,12 @@ services:
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
       GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-worldmap-panel
       GF_FEATURE_TOGGLES_ENABLE: tempoSearch tempoBackendSearch
-      GF_AUTH_ANONYMOUS_ENABLED: false
-      GF_AUTH_DISABLE_LOGIN_FORM: false
-      GF_USERS_ALLOW_SIGN_UP: false
-      GF_ALERTING_ENABLED: true
-      GF_UNIFIED_ALERTING_ENABLED: true
-      GF_SMTP_ENABLED: ${GRAFANA_SMTP_ENABLED:-false}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ALERTING_ENABLED: "true"
+      GF_UNIFIED_ALERTING_ENABLED: "true"
+      GF_SMTP_ENABLED: "${GRAFANA_SMTP_ENABLED:-false}"
       GF_SMTP_HOST: ${GRAFANA_SMTP_HOST}
       GF_SMTP_FROM_ADDRESS: ${GRAFANA_SMTP_FROM}
     secrets:
@@ -213,7 +213,7 @@ services:
           memory: 1G
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.grafana.rule=Host(`grafana.yourdomain.com`)"
+        - "traefik.http.routers.grafana.rule=Host(`grafana.ciwebgroup.com`)"
         - "traefik.http.routers.grafana.entrypoints=websecure"
         - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
         - "traefik.http.services.grafana.loadbalancer.server.port=3000"
@@ -244,7 +244,7 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.alertmanager.rule=Host(`alertmanager.yourdomain.com`)"
+        - "traefik.http.routers.alertmanager.rule=Host(`alertmanager.ciwebgroup.com`)"
         - "traefik.http.routers.alertmanager.entrypoints=websecure"
         - "traefik.http.routers.alertmanager.middlewares=auth"
         - "traefik.http.services.alertmanager.loadbalancer.server.port=9093"
@@ -337,7 +337,7 @@ services:
 
   # Custom WordPress Exporter
   wordpress-exporter:
-    image: registry.yourdomain.com/wordpress-exporter:latest
+    image: registry.ciwebgroup.com/wordpress-exporter:latest
     hostname: wordpress-exporter
     networks:
       - monitoring

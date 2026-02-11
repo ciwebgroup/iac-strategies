@@ -1,0 +1,33 @@
+---
+# Variables specific to Docker Swarm Manager nodes
+
+node_role: manager
+node_type: manager
+
+# Docker Swarm manager-specific settings
+swarm_advertise_addr: "{{ private_ip | default(ansible_default_ipv4.address) }}"
+swarm_listen_addr: "0.0.0.0:2377"
+
+# Node labels (applied via docker node update)
+node_labels:
+  role: manager
+  tier: control-plane
+
+# Constraints for service placement on managers only
+placement_constraints:
+  - "node.role == manager"
+
+# Security: Managers typically run control plane services
+firewall_rules:
+  - port: 2377
+    proto: tcp
+    comment: "Docker Swarm cluster management"
+  - port: 7946
+    proto: tcp
+    comment: "Docker Swarm node communication (TCP)"
+  - port: 7946
+    proto: udp
+    comment: "Docker Swarm node communication (UDP)"
+  - port: 4789
+    proto: udp
+    comment: "Docker overlay network traffic"

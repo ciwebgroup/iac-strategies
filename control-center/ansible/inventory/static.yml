@@ -1,0 +1,65 @@
+---
+# Static Inventory (for local testing or manual entries)
+# This is a fallback when dynamic inventory isn't available
+
+all:
+  children:
+    # Swarm Managers
+    swarm_managers:
+      hosts:
+        wp-manager-01:
+          ansible_host: 138.197.93.119
+          private_ip: 10.10.0.2
+    
+    # Worker Nodes (WordPress apps)
+    worker_nodes:
+      hosts:
+        wp-worker-01:
+          ansible_host: 104.236.230.248
+          private_ip: 10.10.0.4
+        wp-worker-02:
+          ansible_host: 167.71.85.237
+          private_ip: 10.10.0.3
+    
+    # Cache Nodes (Varnish + Redis)
+    cache_nodes:
+      hosts:
+        wp-cache-01:
+          ansible_host: 159.203.77.23
+          private_ip: 10.10.0.5
+    
+    # Database Nodes (MySQL/MariaDB)
+    database_nodes:
+      hosts:
+        wp-db-01:
+          ansible_host: 159.203.125.104
+          private_ip: 10.10.0.6
+    
+    # Storage Nodes (GlusterFS/NFS)
+    storage_nodes:
+      hosts:
+        wp-storage-01:
+          ansible_host: 104.236.27.92
+          private_ip: 10.10.0.7
+    
+    # Monitoring Nodes (Prometheus, Grafana, etc.)
+    monitor_nodes:
+      hosts:
+        wp-monitor-01:
+          ansible_host: 159.65.178.60
+          private_ip: 10.10.0.8
+    
+    # All worker nodes combined (for swarm joining)
+    swarm_workers:
+      children:
+        worker_nodes:
+        cache_nodes:
+        database_nodes:
+        storage_nodes:
+        monitor_nodes:
+    
+    # All nodes
+    all_nodes:
+      children:
+        swarm_managers:
+        swarm_workers:

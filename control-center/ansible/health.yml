@@ -1,0 +1,204 @@
+---
+# =============================================================================
+# HEALTH CHECK - WORDPRESS FARM INFRASTRUCTURE
+# =============================================================================
+# Comprehensive health checks for the entire infrastructure
+# =============================================================================
+
+- name: Health Check - All Nodes
+  hosts: all_nodes
+  gather_facts: true
+  tags: [nodes]
+  
+  tasks:
+    - name: Check node connectivity
+      ping:
+    
+    - name: Check Docker service
+      systemd:
+        name: docker
+        state: started
+      check_mode: true
+      register: docker_service
+    
+    - name: Display Docker status
+      debug:
+        msg: "{{ inventory_hostname }}: Docker is {{ docker_service.status.ActiveState }}"
+
+
+- name: Health Check - Swarm Cluster
+  hosts: swarm_managers[0]
+  tags: [swarm]
+  
+  tasks:
+    - name: Get Swarm node status
+      command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Availability{{ '}}' }}'
+      register: swarm_nodes
+      changed_when: false
+    
+    - name: Check for unhealthy nodes
+      set_fact:
+        unhealthy_nodes: "{{ swarm_nodes.stdout_lines | select('search', '(?!Ready)') | list }}"
+    
+    - name: Display Swarm health
+      debug:
+        msg:
+          - "Total nodes: {{ swarm_nodes.stdout_lines | length }}"
+          - "Unhealthy nodes: {{ unhealthy_nodes | length }}"
+          - "{{ swarm_nodes.stdout }}"
+    
+    - name: Assert all nodes are healthy
+      assert:
+        that:
+          - unhealthy_nodes | length == 0
+        fail_msg: "Some nodes are unhealthy: {{ unhealthy_nodes }}"
+        success_msg: "All Swarm nodes are healthy"
+
+
+- name: Health Check - Networks
+  hosts: swarm_managers[0]
+  tags: [networks]
+  
+  tasks:
+    - name: List overlay networks
+      command: docker network ls --filter driver=overlay --format '{{ '{{' }}.Name{{ '}}' }}'
+      register: existing_networks
+      changed_when: false
+    
+    - name: Check required networks exist
+      set_fact:
+        missing_networks: "{{ swarm_networks | difference(existing_networks.stdout_lines) }}"
+    
+    - name: Display network status
+      debug:
+        msg:
+          - "Required networks: {{ swarm_networks | length }}"
+          - "Existing networks: {{ existing_networks.stdout_lines | length }}"
+          - "Missing networks: {{ missing_networks }}"
+    
+    - name: Assert all networks exist
+      assert:
+        that:
+          - missing_networks | length == 0
+        fail_msg: "Missing networks: {{ missing_networks }}"
+        success_msg: "All required networks exist"
+
+
+- name: Health Check - Services
+  hosts: swarm_managers[0]
+  tags: [services]
+  
+  tasks:
+    - name: Get service status
+      command: docker service ls --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}'
+      register: services
+      changed_when: false
+    
+    - name: Check for services with mismatched replicas
+      shell: docker service ls --format '{{ '{{' }}.Replicas{{ '}}' }}' | grep -v -E '^\d+/\d+$' || true
+      register: unhealthy_services
+      changed_when: false
+    
+    - name: Display service health
+      debug:
+        msg:
+          - "Total services: {{ services.stdout_lines | length }}"
+          - "Services with issues: {{ unhealthy_services.stdout_lines | length }}"
+          - ""
+          - "{{ services.stdout }}"
+    
+    - name: Get detailed status of unhealthy services
+      command: docker service ps {{ item.split()[0] }} --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.CurrentState{{ '}}' }}\t{{ '{{' }}.Error{{ '}}' }}'
+      loop: "{{ services.stdout_lines }}"
+      when: unhealthy_services.stdout_lines | length > 0
+      register: service_details
+      changed_when: false
+    
+    - name: Display unhealthy service details
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ service_details.results }}"
+      when: service_details.results is defined
+
+
+- name: Health Check - Stacks
+  hosts: swarm_managers[0]
+  tags: [stacks]
+  
+  tasks:
+    - name: List deployed stacks
+      command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Services{{ '}}' }}'
+      register: stacks
+      changed_when: false
+    
+    - name: Display stack status
+      debug:
+        msg:
+          - "Deployed stacks:"
+          - "{{ stacks.stdout }}"
+
+
+- name: Health Check - Cache Layer
+  hosts: swarm_managers[0]
+  tags: [cache]
+  
+  tasks:
+    - name: Test Redis connectivity
+      shell: |
+        docker exec $(docker ps -qf name=cache_redis -n1) redis-cli ping || echo "FAILED"
+      register: redis_test
+      changed_when: false
+      failed_when: false
+    
+    - name: Display Redis status
+      debug:
+        msg: "Redis health: {{ redis_test.stdout }}"
+    
+    - name: Check Varnish services
+      command: docker service ps cache_varnish --format '{{ '{{' }}.CurrentState{{ '}}' }}'
+      register: varnish_status
+      changed_when: false
+      failed_when: false
+    
+    - name: Display Varnish status
+      debug:
+        msg: "Varnish status: {{ varnish_status.stdout_lines }}"
+
+
+- name: Health Check - Database Layer
+  hosts: swarm_managers[0]
+  tags: [database]
+  
+  tasks:
+    - name: Test MySQL connectivity
+      shell: |
+        docker exec $(docker ps -qf name=database_mysql -n1) mysqladmin -u root -p{{ mysql_root_password }} status || echo "FAILED"
+      register: mysql_test
+      changed_when: false
+      failed_when: false
+      no_log: true
+    
+    - name: Display MySQL status
+      debug:
+        msg: "MySQL is {{ 'healthy' if 'Uptime' in mysql_test.stdout else 'FAILED' }}"
+
+
+- name: Health Check Summary
+  hosts: localhost
+  tags: [always]
+  
+  tasks:
+    - name: Display health check summary
+      debug:
+        msg:
+          - "========================================"
+          - "Health Check Complete"
+          - "========================================"
+          - "Run with -v for detailed output"
+          - "Run specific checks with --tags:"
+          - "  --tags nodes     : Check node connectivity"
+          - "  --tags swarm     : Check Swarm cluster"
+          - "  --tags services  : Check service health"
+          - "  --tags cache     : Check cache layer"
+          - "  --tags database  : Check database layer"
+          - "========================================"

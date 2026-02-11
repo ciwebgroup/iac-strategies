@@ -1021,5 +1021,3 @@ Sonnet 4.5 Enhanced = Best of All Strategies:
 
 </div>
 
-# hello world
-

@@ -1,0 +1,44 @@
+---
+# Variables specific to Storage tier nodes (GlusterFS/NFS)
+
+node_role: worker
+node_type: storage
+tier: storage
+
+# Node labels for service placement
+node_labels:
+  storage: "true"
+  tier: storage
+  role: worker
+
+# GlusterFS configuration
+gluster_volume_name: "wordpress_storage"
+gluster_brick_dir: "/mnt/gluster/brick"
+gluster_mount_dir: "/mnt/gluster/mount"
+
+# NFS configuration (if using NFS instead)
+nfs_exports:
+  - path: "{{ wordpress_data_path }}"
+    options: "*(rw,sync,no_subtree_check,no_root_squash)"
+
+# Block storage mount point
+block_storage_mount: "/mnt/volume_nyc3_01"
+block_storage_device: "/dev/disk/by-id/scsi-0DO_Volume_*"
+
+# System optimizations for storage workload
+sysctl_config:
+  # File system limits
+  fs.file-max: 131072
+  fs.aio-max-nr: 1048576
+  # Network for NFS/GlusterFS
+  net.core.rmem_max: 33554432
+  net.core.wmem_max: 33554432
+  net.ipv4.tcp_rmem: "4096 87380 33554432"
+  net.ipv4.tcp_wmem: "4096 65536 33554432"
+
+# Placement constraints
+placement_constraints:
+  - "node.labels.storage == true"
+
+# I/O scheduler for storage workloads
+io_scheduler: noop
