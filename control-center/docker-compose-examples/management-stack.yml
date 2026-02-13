@@ -26,11 +26,11 @@ services:
           - node.role == manager
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
           cpus: '0.5'
           memory: 512M
+        reservations:
+          cpus: '0.05'
+          memory: 128M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.portainer.rule=Host(`portainer.ciwebgroup.com`)"
@@ -87,11 +87,11 @@ services:
           - node.role == manager
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
           cpus: '0.5'
           memory: 512M
+        reservations:
+          cpus: '0.05'
+          memory: 128M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.registry.rule=Host(`registry.ciwebgroup.com`)"
