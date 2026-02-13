@@ -1,0 +1,27 @@
+---
+# roles/proxmox_lxc/tasks/main.yml
+# =============================================================================
+# Orchestrates LXC container lifecycle:
+#   1. Validate inputs
+#   2. Ensure the LXC template is available on the Proxmox host
+#   3. Read the SSH public key
+#   4. Create the container (idempotent — skipped if VMID exists)
+#   5. Configure SSH access inside the container
+#   6. Start the container
+#   7. Wait for SSH connectivity
+# =============================================================================
+
+- name: Include pre-flight checks
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Include template tasks
+  ansible.builtin.include_tasks: template.yml
+
+- name: Include container creation tasks
+  ansible.builtin.include_tasks: create.yml
+
+- name: Include SSH provisioning tasks
+  ansible.builtin.include_tasks: ssh.yml
+
+- name: Include container start and verification tasks
+  ansible.builtin.include_tasks: start.yml
