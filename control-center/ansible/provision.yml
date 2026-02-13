@@ -25,6 +25,7 @@
 - name: Provision Infrastructure Prerequisites
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [always, prerequisites]
   
   tasks:
@@ -56,6 +57,7 @@
 - name: Create VPC Network
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [vpc, network]
   
   tasks:
@@ -85,6 +87,7 @@
 - name: Setup SSH Keys
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [ssh, keys]
   
   tasks:
@@ -123,6 +126,7 @@
 - name: Provision Manager Nodes
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [managers, nodes]
   
   tasks:
@@ -170,6 +174,7 @@
 - name: Provision Worker Nodes
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [workers, nodes]
   
   tasks:
@@ -211,6 +216,7 @@
 - name: Provision Cache Nodes
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [cache, nodes]
   
   tasks:
@@ -252,6 +258,7 @@
 - name: Provision Database Nodes
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [database, db, nodes]
   
   tasks:
@@ -293,6 +300,7 @@
 - name: Provision Storage Nodes
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [storage, nodes]
   
   tasks:
@@ -359,6 +367,7 @@
 - name: Provision Monitor Nodes
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [monitors, monitoring, nodes]
   
   tasks:
@@ -401,6 +410,7 @@
 - name: Provision Summary
   hosts: localhost
   gather_facts: false
+  become: false
   tags: [always]
   
   tasks:
