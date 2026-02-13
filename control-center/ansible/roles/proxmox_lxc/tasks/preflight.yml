@@ -1,0 +1,34 @@
+---
+# roles/proxmox_lxc/tasks/preflight.yml
+# Validate required variables before doing anything destructive
+
+- name: "Preflight | Assert required per-host variables are defined"
+  ansible.builtin.assert:
+    that:
+      - lxc_vmid is defined
+      - lxc_hostname is defined
+      - ansible_host is defined
+      - ansible_host is match('^10\.10\.10\.\d{1,3}$')
+    fail_msg: >
+      Each LXC container host must define lxc_vmid, lxc_hostname,
+      and ansible_host (a 10.10.10.x address).
+    quiet: true
+
+- name: "Preflight | Assert Proxmox API credentials are available"
+  ansible.builtin.assert:
+    that:
+      - proxmox_api_host | length > 0
+      - proxmox_api_user | length > 0
+      - proxmox_api_token_id | length > 0
+      - proxmox_api_token_secret | length > 0
+    fail_msg: >
+      Proxmox API credentials are missing.  Set PROXMOX_HOST_IP,
+      PROXMOX_API_TOKEN_ID, and PROXMOX_API_TOKEN_SECRET in your
+      environment or inventory.
+    quiet: true
+
+- name: "Preflight | Read local SSH public key"
+  ansible.builtin.set_fact:
+    _lxc_ssh_public_key: "{{ lookup('file', lxc_ssh_public_key_file) }}"
+  delegate_to: localhost
+  run_once: true
