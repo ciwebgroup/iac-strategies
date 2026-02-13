@@ -1,0 +1,18 @@
+---
+# group_vars/proxmox_hosts.yml
+# Variables for the Proxmox VE hypervisor host(s)
+
+ansible_user: root
+ansible_python_interpreter: /usr/bin/python3
+
+# Proxmox API credentials — sourced from environment variables
+proxmox_api_host: "{{ lookup('env', 'PROXMOX_HOST_IP') }}"
+proxmox_api_user: "root@pam"
+proxmox_api_token_id: "{{ lookup('env', 'PROXMOX_API_TOKEN_ID') | default('ansible', true) }}"
+proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+proxmox_node_name: "proxmox-node-01"
+
+# Python dependencies needed on the Proxmox host for the proxmox modules
+proxmox_python_packages:
+  - proxmoxer
+  - requests
