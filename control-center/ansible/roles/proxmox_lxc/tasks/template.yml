@@ -1,0 +1,34 @@
+---
+# roles/proxmox_lxc/tasks/template.yml
+# Ensure the Debian 12 LXC template is available on the Proxmox node.
+# Downloads it from the default repository if missing.
+
+- name: "Template | Update LXC template index"
+  ansible.builtin.command:
+    cmd: pveam update
+  register: _pveam_update
+  changed_when: "'update' in (_pveam_update.stdout | default(''))"
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  run_once: true
+
+- name: "Template | List available LXC templates"
+  ansible.builtin.command:
+    cmd: pveam list local
+  register: _pveam_list
+  changed_when: false
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  run_once: true
+
+- name: "Template | Extract template filename from path"
+  ansible.builtin.set_fact:
+    _lxc_template_filename: "{{ lxc_template | regex_replace('^[^:]+:', '') | regex_replace('^vztmpl/', '') }}"
+  run_once: true
+
+- name: "Template | Download template if not present"
+  ansible.builtin.command:
+    cmd: "pveam download local {{ _lxc_template_filename }}"
+  when: _lxc_template_filename not in _pveam_list.stdout
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  run_once: true
+  register: _template_download
+  changed_when: "'download' in (_template_download.stdout | default(''))"
