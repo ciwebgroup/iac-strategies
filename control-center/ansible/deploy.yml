@@ -36,6 +36,17 @@
     - name: Gather facts
       setup:
 
+    - name: Validate required environment values
+      assert:
+        that:
+          - registry_secret | length > 0
+          - crowdsec_bouncer_key | length > 0
+          - digitalocean_spaces_endpoint | length > 0
+          - backup_bucket | length > 0
+        fail_msg: "One or more required environment values are missing. Update scripts/.env and re-run deploy."
+      run_once: true
+      delegate_to: localhost
+
 
 - name: Base System Configuration
   hosts: all_nodes
@@ -208,6 +219,60 @@
       loop: "{{ swarm_networks }}"
       register: network_creation
       changed_when: "'already exists' not in network_creation.stderr"
+
+
+- name: Ensure Docker Secrets
+  hosts: swarm_managers[0]
+  tags: [secrets]
+  tasks:
+    - name: List existing Docker secrets
+      command: docker secret ls --format '{{ '{{' }}.Name{{ '}}' }}'
+      register: existing_secrets
+      changed_when: false
+
+    - name: Validate required secret values
+      assert:
+        that:
+          - mysql_root_password | length > 0
+          - mysql_exporter_password | length > 0
+          - s3_access_key | length > 0
+          - s3_secret_key | length > 0
+          - grafana_admin_password | length > 0
+          - wp_exporter_user | length > 0
+          - wp_exporter_password | length > 0
+          - portainer_admin_password | length > 0
+          - restic_password | length > 0
+          - swarmpit_db_password | length > 0
+        fail_msg: "One or more required secret values are missing. Update scripts/.env and re-run deploy."
+
+    - name: Create Docker secrets
+      community.docker.docker_secret:
+        name: "{{ item.name }}"
+        data: "{{ item.value }}"
+        state: present
+      loop:
+        - name: mysql_root_password
+          value: "{{ mysql_root_password }}"
+        - name: mysql_exporter_password
+          value: "{{ mysql_exporter_password }}"
+        - name: s3_access_key
+          value: "{{ s3_access_key }}"
+        - name: s3_secret_key
+          value: "{{ s3_secret_key }}"
+        - name: grafana_admin_password
+          value: "{{ grafana_admin_password }}"
+        - name: wp_exporter_user
+          value: "{{ wp_exporter_user }}"
+        - name: wp_exporter_password
+          value: "{{ wp_exporter_password }}"
+        - name: portainer_admin_password
+          value: "{{ portainer_admin_password }}"
+        - name: restic_password
+          value: "{{ restic_password }}"
+        - name: swarmpit_db_password
+          value: "{{ swarmpit_db_password }}"
+      when: item.name not in existing_secrets.stdout_lines
+      no_log: true
 
 
 - name: Deploy Verification Scripts
@@ -680,6 +745,40 @@
       retries: 60
       delay: 10
       changed_when: false
+
+
+- name: Configure Database Exporter Users
+  hosts: database_nodes
+  tags: [database, users]
+  tasks:
+    - name: Ensure MySQL exporter and WordPress exporter users exist
+      shell: |
+        set -e
+        container_id=$(docker ps -qf name=database_galera-1 | head -n1)
+        if [ -z "$container_id" ]; then
+          echo "Galera container not found on this node, skipping"
+          exit 0
+        fi
+        sql="CREATE USER IF NOT EXISTS 'exporter'@'%' IDENTIFIED BY '{{ mysql_exporter_password }}'; GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'exporter'@'%'; CREATE USER IF NOT EXISTS '{{ wp_exporter_user }}'@'%' IDENTIFIED BY '{{ wp_exporter_password }}'; GRANT SELECT ON *.* TO '{{ wp_exporter_user }}'@'%'; FLUSH PRIVILEGES;"
+        docker exec "$container_id" sh -lc "mysql -uroot -p\"$(cat /run/secrets/mysql_root_password)\" -e \"$sql\""
+      register: exporter_user_create
+      retries: 10
+      delay: 10
+      until: exporter_user_create.rc == 0
+      no_log: true
+
+
+- name: Restart Database Exporter Services
+  hosts: swarm_managers[0]
+  tags: [database, users]
+  tasks:
+    - name: Force restart of MySQL exporter services
+      command: docker service update --force database_mysql-exporter-{{ item }}
+      loop:
+        - 1
+        - 2
+        - 3
+      changed_when: true
 
 
 - name: Deploy Monitoring Stack
