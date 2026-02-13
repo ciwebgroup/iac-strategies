@@ -29,9 +29,9 @@ services:
       --binlog_format=ROW
       --default_storage_engine=InnoDB
       --innodb_autoinc_lock_mode=2
-      --innodb_buffer_pool_size=8G
-      --innodb_log_file_size=512M
-      --max_connections=1000
+      --innodb_buffer_pool_size=512M
+      --innodb_log_file_size=128M
+      --max_connections=200
       --max_allowed_packet=256M
       --query_cache_size=0
       --query_cache_type=0
@@ -41,14 +41,14 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.database == node1
+          - node.labels.db == true
       resources:
         limits:
-          cpus: '6'
-          memory: 12G
+          cpus: '2'
+          memory: 2048M
         reservations:
-          cpus: '4'
-          memory: 8G
+          cpus: '0.25'
+          memory: 512M
       restart_policy:
         condition: on-failure
         delay: 10s
@@ -83,9 +83,9 @@ services:
       --binlog_format=ROW
       --default_storage_engine=InnoDB
       --innodb_autoinc_lock_mode=2
-      --innodb_buffer_pool_size=8G
-      --innodb_log_file_size=512M
-      --max_connections=1000
+      --innodb_buffer_pool_size=512M
+      --innodb_log_file_size=128M
+      --max_connections=200
       --max_allowed_packet=256M
       --query_cache_size=0
       --query_cache_type=0
@@ -95,14 +95,14 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.database == node2
+          - node.labels.db == true
       resources:
         limits:
-          cpus: '6'
-          memory: 12G
+          cpus: '2'
+          memory: 2048M
         reservations:
-          cpus: '4'
-          memory: 8G
+          cpus: '0.25'
+          memory: 512M
       restart_policy:
         condition: on-failure
         delay: 10s
@@ -137,9 +137,9 @@ services:
       --binlog_format=ROW
       --default_storage_engine=InnoDB
       --innodb_autoinc_lock_mode=2
-      --innodb_buffer_pool_size=8G
-      --innodb_log_file_size=512M
-      --max_connections=1000
+      --innodb_buffer_pool_size=512M
+      --innodb_log_file_size=128M
+      --max_connections=200
       --max_allowed_packet=256M
       --query_cache_size=0
       --query_cache_type=0
@@ -149,14 +149,14 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.database == node3
+          - node.labels.db == true
       resources:
         limits:
-          cpus: '6'
-          memory: 12G
+          cpus: '2'
+          memory: 2048M
         reservations:
-          cpus: '4'
-          memory: 8G
+          cpus: '0.25'
+          memory: 512M
       restart_policy:
         condition: on-failure
         delay: 10s
@@ -203,11 +203,11 @@ services:
           - spread: node.id
       resources:
         limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
           cpus: '1'
-          memory: 1G
+          memory: 1024M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
       update_config:
         parallelism: 1
         delay: 10s
@@ -248,7 +248,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.database == node1
+          - node.labels.db == true
     secrets:
       - mysql_exporter_password
 
@@ -280,7 +280,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.database == node2
+          - node.labels.db == true
     secrets:
       - mysql_exporter_password
 
@@ -312,7 +312,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.database == node3
+          - node.labels.db == true
     secrets:
       - mysql_exporter_password
 
