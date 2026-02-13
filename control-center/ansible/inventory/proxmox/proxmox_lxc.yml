@@ -1,0 +1,194 @@
+---
+# =============================================================================
+# PROXMOX LXC CONTAINER INVENTORY
+# =============================================================================
+# This inventory defines LXC containers running on a Proxmox host inside a
+# DigitalOcean Droplet.  Because DO uses KVM, nested KVM is unavailable —
+# only LXC containers are supported.
+#
+# Network layout:
+#   Proxmox Host  → vmbr0  10.10.10.1/24  (private bridge, NAT masquerade)
+#   LXC containers → 10.10.10.x  (static IPs on vmbr0)
+#
+# Connection model:
+#   Control‑machine  ──SSH──▶  Proxmox Host (public IP)
+#                                  ├── ProxyJump ──▶  LXC containers (private IPs)
+#
+# Usage:
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml
+# =============================================================================
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: "{{ lookup('env', 'LXC_SSH_KEY_PATH') | default('~/.ssh/id_rsa', true) }}"
+  children:
+    # -------------------------------------------------------------------------
+    # The Proxmox hypervisor itself – tasks that create containers run HERE
+    # -------------------------------------------------------------------------
+    proxmox_hosts:
+      hosts:
+        proxmox-node-01:
+          ansible_host: "{{ lookup('env', 'PROXMOX_HOST_IP') }}"
+          ansible_user: root
+          # Proxmox API connection details (used by community.general.proxmox* modules)
+          proxmox_api_host: "{{ lookup('env', 'PROXMOX_HOST_IP') }}"
+          proxmox_api_user: "root@pam"
+          proxmox_api_token_id: "{{ lookup('env', 'PROXMOX_API_TOKEN_ID') | default('ansible', true) }}"
+          proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+          proxmox_node_name: "proxmox-node-01"
+
+    # -------------------------------------------------------------------------
+    # LXC containers — grouped by function (mirrors your DO static inventory)
+    # -------------------------------------------------------------------------
+    lxc_containers:
+      vars:
+        # --- Connection via Jump Host (ProxyCommand) ---
+        ansible_user: root
+        ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+        ansible_ssh_common_args: >-
+          -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null
+          -o ProxyCommand="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p root@{{ hostvars['proxmox-node-01']['ansible_host'] }}"
+
+        # --- LXC Defaults (overridable per host / per group) ---
+        lxc_template: "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst"
+        lxc_storage: "local"
+        lxc_bridge: "vmbr0"
+        lxc_gateway: "10.10.10.1"
+        lxc_nameserver: "1.1.1.1"
+        lxc_searchdomain: "lxc.local"
+        lxc_unprivileged: true
+        lxc_onboot: true
+        lxc_cores: 2
+        lxc_memory: 2048       # MB
+        lxc_swap: 512          # MB
+        lxc_disk_size: 20      # GB
+        lxc_password: "{{ lookup('env', 'LXC_ROOT_PASSWORD') | default('ChangeMe!', true) }}"
+
+      children:
+        # — Swarm Managers —
+        lxc_swarm_managers:
+          hosts:
+            lxc-manager-01:
+              ansible_host: 10.10.10.10
+              lxc_vmid: 110
+              lxc_hostname: lxc-manager-01
+              lxc_cores: 2
+              lxc_memory: 4096
+
+            lxc-manager-02:
+              ansible_host: 10.10.10.11
+              lxc_vmid: 111
+              lxc_hostname: lxc-manager-02
+              lxc_cores: 2
+              lxc_memory: 4096
+
+            lxc-manager-03:
+              ansible_host: 10.10.10.12
+              lxc_vmid: 112
+              lxc_hostname: lxc-manager-03
+              lxc_cores: 2
+              lxc_memory: 4096
+
+        # — Worker Nodes —
+        lxc_worker_nodes:
+          hosts:
+            lxc-worker-01:
+              ansible_host: 10.10.10.20
+              lxc_vmid: 120
+              lxc_hostname: lxc-worker-01
+              lxc_cores: 4
+              lxc_memory: 4096
+              lxc_disk_size: 40
+
+            lxc-worker-02:
+              ansible_host: 10.10.10.21
+              lxc_vmid: 121
+              lxc_hostname: lxc-worker-02
+              lxc_cores: 4
+              lxc_memory: 4096
+              lxc_disk_size: 40
+
+        # — Cache Nodes (Varnish + Redis) —
+        lxc_cache_nodes:
+          hosts:
+            lxc-cache-01:
+              ansible_host: 10.10.10.30
+              lxc_vmid: 130
+              lxc_hostname: lxc-cache-01
+              lxc_cores: 2
+              lxc_memory: 4096
+
+        # — Database Nodes (MariaDB / Galera) —
+        lxc_database_nodes:
+          hosts:
+            lxc-db-01:
+              ansible_host: 10.10.10.40
+              lxc_vmid: 140
+              lxc_hostname: lxc-db-01
+              lxc_cores: 4
+              lxc_memory: 4096
+              lxc_disk_size: 50
+
+        # — Storage Nodes (GlusterFS / NFS) —
+        lxc_storage_nodes:
+          hosts:
+            lxc-storage-01:
+              ansible_host: 10.10.10.50
+              lxc_vmid: 150
+              lxc_hostname: lxc-storage-01
+              lxc_cores: 2
+              lxc_memory: 2048
+              lxc_disk_size: 100
+
+        # — Monitoring Nodes (Prometheus / Grafana) —
+        lxc_monitor_nodes:
+          hosts:
+            lxc-monitor-01:
+              ansible_host: 10.10.10.60
+              lxc_vmid: 160
+              lxc_hostname: lxc-monitor-01
+              lxc_cores: 2
+              lxc_memory: 2048
+              lxc_disk_size: 40
+
+    # -------------------------------------------------------------------------
+    # Compatibility groups (so existing playbooks work with LXC inventory)
+    # -------------------------------------------------------------------------
+    swarm_managers:
+      children:
+        lxc_swarm_managers:
+
+    worker_nodes:
+      children:
+        lxc_worker_nodes:
+
+    cache_nodes:
+      children:
+        lxc_cache_nodes:
+
+    database_nodes:
+      children:
+        lxc_database_nodes:
+
+    storage_nodes:
+      children:
+        lxc_storage_nodes:
+
+    monitor_nodes:
+      children:
+        lxc_monitor_nodes:
+
+    swarm_workers:
+      children:
+        worker_nodes:
+        cache_nodes:
+        database_nodes:
+        storage_nodes:
+        monitor_nodes:
+
+    all_nodes:
+      children:
+        swarm_managers:
+        swarm_workers:
