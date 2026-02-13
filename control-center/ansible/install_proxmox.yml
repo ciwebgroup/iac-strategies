@@ -1,0 +1,248 @@
+---
+# =============================================================================
+# INSTALL PROXMOX VE ON A DEBIAN 12 DROPLET
+# =============================================================================
+# This playbook converts a clean Debian 12 DigitalOcean Droplet into a
+# Proxmox VE host.  It is called by ../scripts/setup-proxmox.sh after the
+# Droplet has been provisioned via doctl.
+#
+# What it does:
+#   1. Configures /etc/hosts and hostname
+#   2. Adds the Proxmox VE apt repository + GPG key
+#   3. Installs Proxmox VE, bridge-utils, and friends
+#   4. Configures vmbr0 (10.10.10.1/24) as a private NAT bridge
+#   5. Enables IP forwarding and iptables masquerade
+#   6. Installs Python dependencies (proxmoxer) for future Ansible modules
+#   7. Creates an API token for Ansible automation
+#   8. Reboots into the Proxmox kernel
+#
+# Usage (usually called by setup-proxmox.sh, not directly):
+#   ansible-playbook -i "<IP>," -u root install_proxmox.yml
+# =============================================================================
+
+- name: Install Proxmox VE on Debian 12
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    proxmox_bridge_ip: "10.10.10.1"
+    proxmox_bridge_netmask: "255.255.255.0"
+    proxmox_bridge_cidr: "10.10.10.0/24"
+    pve_api_token_name: "ansible"
+
+  tasks:
+    # =================================================================
+    # STEP 1 — Hostname & /etc/hosts
+    # =================================================================
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: proxmox-node-01
+
+    - name: Configure /etc/hosts for Proxmox
+      ansible.builtin.copy:
+        dest: /etc/hosts
+        content: |
+          127.0.0.1       localhost
+          {{ ansible_default_ipv4.address }}  proxmox-node-01.localdomain proxmox-node-01
+
+          # The following lines are desirable for IPv6 capable hosts
+          ::1     localhost ip6-localhost ip6-loopback
+          ff02::1 ip6-allnodes
+          ff02::2 ip6-allrouters
+        mode: "0644"
+
+    # =================================================================
+    # STEP 2 — Proxmox VE Repository
+    # =================================================================
+    - name: Add Proxmox VE GPG key
+      ansible.builtin.apt_key:
+        url: https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg
+        state: present
+
+    - name: Add Proxmox VE no-subscription repository
+      ansible.builtin.apt_repository:
+        repo: "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription"
+        filename: pve-no-subscription
+        state: present
+
+    - name: Remove enterprise repo if present
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/pve-enterprise.list
+        state: absent
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+
+    # =================================================================
+    # STEP 3 — Install Proxmox VE
+    # =================================================================
+    - name: Install Proxmox VE and utilities
+      ansible.builtin.apt:
+        name:
+          - proxmox-ve
+          - postfix
+          - open-iscsi
+          - chrony
+          - bridge-utils
+          - ifupdown2
+          - python3-pip
+          - python3-proxmoxer
+        state: present
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Remove os-prober (conflicts with Proxmox)
+      ansible.builtin.apt:
+        name: os-prober
+        state: absent
+
+    # =================================================================
+    # STEP 4 — Private Bridge (vmbr0) with NAT
+    # =================================================================
+    - name: Configure vmbr0 bridge interface
+      ansible.builtin.blockinfile:
+        path: /etc/network/interfaces
+        marker: "# {mark} ANSIBLE MANAGED — vmbr0 private bridge"
+        block: |
+          auto vmbr0
+          iface vmbr0 inet static
+              address  {{ proxmox_bridge_ip }}
+              netmask  {{ proxmox_bridge_netmask }}
+              bridge_ports none
+              bridge_stp off
+              bridge_fd 0
+              post-up   iptables -t nat -A POSTROUTING -s '{{ proxmox_bridge_cidr }}' -o eth0 -j MASQUERADE
+              post-down iptables -t nat -D POSTROUTING -s '{{ proxmox_bridge_cidr }}' -o eth0 -j MASQUERADE
+      notify: restart networking
+
+    # =================================================================
+    # STEP 5 — IP Forwarding & NAT
+    # =================================================================
+    - name: Enable IP forwarding (persistent)
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+
+    # =================================================================
+    # STEP 6 — Python deps for Ansible Proxmox modules
+    # =================================================================
+    - name: Install proxmoxer Python library (Debian packages)
+      ansible.builtin.apt:
+        name:
+          - python3-proxmoxer
+          - python3-requests
+        state: present
+
+    # =================================================================
+    # STEP 7 — API Token for Ansible automation
+    # =================================================================
+    - name: Check if API token already exists
+      ansible.builtin.command:
+        cmd: pveum user token list root@pam --output-format json
+      register: _existing_tokens
+      changed_when: false
+      failed_when: false
+
+    - name: Create Proxmox API token for Ansible
+      ansible.builtin.command:
+        cmd: pveum user token add root@pam {{ pve_api_token_name }} --privsep 0 --output-format json
+      register: _api_token_result
+      when: pve_api_token_name not in (_existing_tokens.stdout | default(''))
+      changed_when: true
+
+    - name: Parse API token secret
+      ansible.builtin.set_fact:
+        _api_token_secret: "{{ (_api_token_result.stdout | from_json).data.value }}"
+      when:
+        - _api_token_result is changed
+        - _api_token_result.stdout is defined
+        - _api_token_result.stdout is search('"value"')
+
+    - name: Display API token (save this!)
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "SAVE THIS — you will not see it again!"
+          - "Token ID:     {{ pve_api_token_name }}"
+          - "Token Secret: {{ _api_token_secret }}"
+          - "============================================"
+          - ""
+          - "Export these before running lxc_provision.yml:"
+          - "  export PROXMOX_API_TOKEN_ID={{ pve_api_token_name }}"
+          - "  export PROXMOX_API_TOKEN_SECRET={{ _api_token_secret }}"
+      when:
+        - _api_token_result is changed
+        - _api_token_secret is defined
+
+    - name: Save token secret to file on host
+      ansible.builtin.copy:
+        dest: /root/.proxmox_ansible_token
+        content: |
+          # Proxmox API token for Ansible — created {{ ansible_date_time.iso8601 }}
+          PROXMOX_API_TOKEN_ID={{ pve_api_token_name }}
+          PROXMOX_API_TOKEN_SECRET={{ _api_token_secret }}
+        mode: "0600"
+      when:
+        - _api_token_result is changed
+        - _api_token_secret is defined
+
+    - name: Warn if token secret could not be parsed
+      ansible.builtin.debug:
+        msg:
+          - "API token was created, but the secret could not be parsed from output."
+          - "If this is a rerun, the token may already exist and the secret is not retrievable."
+          - "Delete the token and re-run to get a new secret:"
+          - "  pveum user token delete root@pam {{ pve_api_token_name }}"
+          - "  pveum user token add root@pam {{ pve_api_token_name }} --privsep 0 --output-format json"
+      when:
+        - _api_token_result is changed
+        - _api_token_secret is not defined
+
+    # =================================================================
+    # STEP 8 — Reboot into Proxmox kernel
+    # =================================================================
+    - name: Reboot to load Proxmox kernel
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        msg: "Rebooting to load Proxmox VE kernel"
+      when: not (skip_reboot | default(false) | bool)
+
+    - name: Wait for Proxmox API to become available
+      ansible.builtin.uri:
+        url: "https://localhost:8006/api2/json/version"
+        validate_certs: false
+        status_code: 200
+      register: _pve_check
+      retries: 30
+      delay: 10
+      until: _pve_check.status == 200
+      when: not (skip_reboot | default(false) | bool)
+
+    - name: Display final status
+      ansible.builtin.debug:
+        msg:
+          - "Proxmox VE installed successfully!"
+          - "Version: {{ _pve_check.json.data.version }}"
+          - "Web UI:  https://{{ ansible_default_ipv4.address }}:8006"
+          - "Bridge:  vmbr0 @ {{ proxmox_bridge_ip }}/24 (NAT)"
+      when: not (skip_reboot | default(false) | bool)
+
+    - name: Display final status (reboot skipped)
+      ansible.builtin.debug:
+        msg:
+          - "Proxmox VE installed (reboot skipped)."
+          - "Reboot manually to load Proxmox kernel."
+          - "Web UI:  https://{{ ansible_default_ipv4.address }}:8006"
+          - "Bridge:  vmbr0 @ {{ proxmox_bridge_ip }}/24 (NAT)"
+      when: skip_reboot | default(false) | bool
+
+  handlers:
+    - name: restart networking
+      ansible.builtin.service:
+        name: networking
+        state: restarted
