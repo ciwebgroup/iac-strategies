@@ -28,6 +28,7 @@ vpc_cidr: "{{ lookup('env', 'VPC_CIDR') | default('10.10.0.0/16', true) }}"
 # DigitalOcean Spaces
 do_spaces_bucket: "{{ lookup('env', 'DO_SPACES_BUCKET') | default('wordpress-farm-backups', true) }}"
 do_spaces_region: "{{ lookup('env', 'DO_SPACES_REGION') | default('nyc3', true) }}"
+do_spaces_endpoint: "{{ lookup('env', 'DO_SPACES_ENDPOINT') | default('https://nyc3.digitaloceanspaces.com', true) }}"
 do_spaces_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') }}"
 do_spaces_secret_key: "{{ lookup('env', 'S3_SECRET_KEY') }}"
 
@@ -83,7 +84,10 @@ swarm_networks:
   - storage-net
   - cache-net
   - observability-net
+  - monitoring
+  - shared-services
   - crowdsec-net
+  - management
   - management-net
   - contractor-net
 
@@ -91,6 +95,7 @@ swarm_networks:
 # DATABASE CONFIGURATION
 # =============================================================================
 mysql_root_password: "{{ lookup('env', 'MYSQL_ROOT_PASSWORD') }}"
+mysql_exporter_password: "{{ lookup('env', 'MYSQL_EXPORTER_PASSWORD') }}"
 mysql_host: "{{ lookup('env', 'MYSQL_HOST') | default('proxysql', true) }}"
 mysql_port: "{{ lookup('env', 'MYSQL_PORT') | default('6033', true) }}"
 
@@ -101,6 +106,8 @@ s3_endpoint: "{{ lookup('env', 'S3_ENDPOINT') | default('https://nyc3.digitaloce
 s3_bucket: "{{ lookup('env', 'S3_BUCKET') | default('wordpress-farm-backups', true) }}"
 s3_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') }}"
 s3_secret_key: "{{ lookup('env', 'S3_SECRET_KEY') }}"
+digitalocean_spaces_endpoint: "{{ lookup('env', 'DIGITALOCEAN_SPACES_ENDPOINT') | default(do_spaces_endpoint, true) }}"
+backup_bucket: "{{ lookup('env', 'BACKUP_BUCKET') | default(do_spaces_bucket, true) }}"
 s3_prefix_database: "{{ lookup('env', 'S3_PREFIX') | default('database-backups', true) }}"
 s3_prefix_wordpress: "wordpress-files"
 
@@ -120,6 +127,16 @@ cloudflare_zones_config: "{{ lookup('env', 'CF_ZONES_CONFIG') | default('../scri
 alertmanager_url: "{{ lookup('env', 'ALERTMANAGER_URL') | default('http://alertmanager:9093', true) }}"
 prometheus_pushgateway_url: "{{ lookup('env', 'PUSHGATEWAY_URL') | default('http://prometheus-pushgateway:9091', true) }}"
 slack_webhook_url: "{{ lookup('env', 'NOTIFICATION_URL') }}"
+registry_secret: "{{ lookup('env', 'REGISTRY_SECRET') }}"
+crowdsec_bouncer_key: "{{ lookup('env', 'CROWDSEC_BOUNCER_KEY') }}"
+watchtower_notification_url: "{{ lookup('env', 'WATCHTOWER_NOTIFICATION_URL') }}"
+apprise_urls: "{{ lookup('env', 'APPRISE_URLS') }}"
+grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
+wp_exporter_user: "{{ lookup('env', 'WP_EXPORTER_USER') }}"
+wp_exporter_password: "{{ lookup('env', 'WP_EXPORTER_PASSWORD') }}"
+portainer_admin_password: "{{ lookup('env', 'PORTAINER_ADMIN_PASSWORD') }}"
+restic_password: "{{ lookup('env', 'RESTIC_PASSWORD') }}"
+swarmpit_db_password: "{{ lookup('env', 'SWARMPIT_DB_PASSWORD') }}"
 
 # =============================================================================
 # PATHS
