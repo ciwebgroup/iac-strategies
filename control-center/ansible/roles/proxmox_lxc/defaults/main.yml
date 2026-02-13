@@ -1,0 +1,34 @@
+---
+# roles/proxmox_lxc/defaults/main.yml
+# Default values — all overridable from inventory or group_vars
+
+# Proxmox connection (typically set in inventory on proxmox_hosts group)
+proxmox_api_host: "{{ hostvars[groups['proxmox_hosts'][0]]['proxmox_api_host'] }}"
+proxmox_api_user: "{{ hostvars[groups['proxmox_hosts'][0]]['proxmox_api_user'] }}"
+proxmox_api_token_id: "{{ hostvars[groups['proxmox_hosts'][0]]['proxmox_api_token_id'] }}"
+proxmox_api_token_secret: "{{ hostvars[groups['proxmox_hosts'][0]]['proxmox_api_token_secret'] }}"
+proxmox_node_name: "{{ hostvars[groups['proxmox_hosts'][0]]['proxmox_node_name'] }}"
+
+# LXC Container defaults
+lxc_template: "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst"
+lxc_storage: "local"
+lxc_bridge: "vmbr0"
+lxc_gateway: "10.10.10.1"
+lxc_nameserver: "1.1.1.1"
+lxc_searchdomain: "lxc.local"
+lxc_unprivileged: true
+lxc_onboot: true
+lxc_cores: 2
+lxc_memory: 2048
+lxc_swap: 512
+lxc_disk_size: 20
+lxc_password: "{{ lookup('env', 'LXC_ROOT_PASSWORD') | default('ChangeMe!', true) }}"
+
+# SSH key to inject into containers
+lxc_ssh_public_key_file: "~/.ssh/id_rsa.pub"
+
+# Whether to start the container after creation
+lxc_start_after_create: true
+
+# Wait for SSH after starting (seconds)
+lxc_ssh_wait_timeout: 120
