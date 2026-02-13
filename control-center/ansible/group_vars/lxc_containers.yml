@@ -1,0 +1,25 @@
+---
+# group_vars/lxc_containers.yml
+# Shared variables for ALL LXC containers on the Proxmox host.
+# Per-host overrides live in the inventory file (proxmox_lxc.yml).
+
+# --- Connection ---
+ansible_user: root
+ansible_python_interpreter: /usr/bin/python3
+
+# --- LXC Defaults ---
+lxc_template: "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst"
+lxc_storage: "local"
+lxc_bridge: "vmbr0"
+lxc_gateway: "10.10.10.1"
+lxc_nameserver: "1.1.1.1"
+lxc_searchdomain: "lxc.local"
+lxc_unprivileged: true
+lxc_onboot: true
+lxc_cores: 2
+lxc_memory: 2048
+lxc_swap: 512
+lxc_disk_size: 20
+
+# --- SSH ---
+lxc_ssh_public_key_file: "~/.ssh/id_rsa.pub"
