@@ -52,7 +52,7 @@ services:
     
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 1
       placement:
         constraints:
           - node.labels.cache == true
@@ -73,11 +73,11 @@ services:
         window: 120s
       resources:
         limits:
-          cpus: '2.0'
-          memory: 4096M
+          cpus: '0.6'
+          memory: 768M
         reservations:
-          cpus: '0.5'
-          memory: 2048M
+          cpus: '0.1'
+          memory: 192M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.varnish.rule=HostRegexp(`{host:.+}`)"
@@ -154,7 +154,7 @@ services:
       - --appendonly
       - "yes"
       - --maxmemory
-      - "2gb"
+      - "512mb"
       - --maxmemory-policy
       - "allkeys-lru"
       - --save
@@ -178,18 +178,17 @@ services:
       placement:
         constraints:
           - node.labels.cache == true
-          - node.labels.cache-node == 1
       restart_policy:
         condition: on-failure
         delay: 5s
         max_attempts: 3
       resources:
         limits:
-          cpus: '1.0'
-          memory: 2560M
+          cpus: '0.5'
+          memory: 768M
         reservations:
-          cpus: '0.25'
-          memory: 512M
+          cpus: '0.1'
+          memory: 192M
       labels:
         - "traefik.enable=false"
         - "prometheus.scrape=true"
@@ -221,7 +220,7 @@ services:
       - --replica-read-only
       - "yes"
       - --maxmemory
-      - "2gb"
+      - "512mb"
       - --maxmemory-policy
       - "allkeys-lru"
     
@@ -237,7 +236,7 @@ services:
     
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 1
       placement:
         constraints:
           - node.labels.cache == true
@@ -249,11 +248,11 @@ services:
         max_attempts: 3
       resources:
         limits:
-          cpus: '0.5'
-          memory: 2560M
-        reservations:
-          cpus: '0.1'
+          cpus: '0.3'
           memory: 512M
+        reservations:
+          cpus: '0.05'
+          memory: 128M
       labels:
         - "traefik.enable=false"
     
@@ -288,7 +287,7 @@ services:
     
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 1
       placement:
         constraints:
           - node.labels.cache == true
