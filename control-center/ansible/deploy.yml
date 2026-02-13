@@ -230,7 +230,7 @@
 
 
 - name: Configure Infrastructure Directories
-  hosts: swarm_managers[0]
+  hosts: all_nodes
   tags: [config, dirs]
   tasks:
     - name: Create infrastructure directories
@@ -250,6 +250,8 @@
         dest: "{{ config_dir }}/"
         recursive: true
         delete: false
+        use_ssh_args: true
+        rsync_path: "rsync"
     
     - name: Copy Docker Compose stack files
       synchronize:
@@ -257,6 +259,365 @@
         dest: "{{ stacks_dir }}/"
         recursive: true
         delete: false
+        use_ssh_args: true
+        rsync_path: "rsync"
+
+    - name: Copy operational scripts
+      synchronize:
+        src: "{{ playbook_dir }}/../scripts/"
+        dest: "{{ scripts_dir }}/"
+        recursive: true
+        delete: false
+        use_ssh_args: true
+        rsync_path: "rsync"
+
+    - name: Copy web assets
+      synchronize:
+        src: "{{ playbook_dir }}/../web/"
+        dest: "{{ project_root }}/web/"
+        recursive: true
+        delete: false
+        use_ssh_args: true
+        rsync_path: "rsync"
+
+    - name: Create stack runtime directories for bind mounts
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ stacks_dir }}/registry"
+        - "{{ stacks_dir }}/backup-scripts"
+        - "{{ stacks_dir }}/mariadb-config"
+        - "{{ stacks_dir }}/proxysql-config"
+        - "{{ stacks_dir }}/prometheus"
+        - "{{ stacks_dir }}/prometheus/alerts"
+        - "{{ stacks_dir }}/mimir"
+        - "{{ stacks_dir }}/loki"
+        - "{{ stacks_dir }}/promtail"
+        - "{{ stacks_dir }}/tempo"
+        - "{{ stacks_dir }}/grafana/provisioning/datasources"
+        - "{{ stacks_dir }}/grafana/provisioning/dashboards"
+        - "{{ stacks_dir }}/grafana/dashboards"
+        - "{{ stacks_dir }}/alertmanager"
+        - "{{ stacks_dir }}/blackbox"
+        - "{{ stacks_dir }}/wordpress-exporter"
+        - "{{ stacks_dir }}/varnish"
+        - "{{ config_dir }}/nginx"
+        - "{{ config_dir }}/sftp/users"
+        - "{{ config_dir }}/sftp/keys"
+        - /mnt/glusterfs
+        - /var/opt/mysql/galera-1
+        - /var/opt/mysql/galera-2
+        - /var/opt/mysql/galera-3
+        - /var/opt/backups
+        - /var/opt/backups/database
+        - /var/opt/backups/wordpress
+        - /var/opt/wordpress-farm/data/redis-master
+        - /var/opt/nfs
+
+    - name: Seed Registry config
+      copy:
+        dest: "{{ stacks_dir }}/registry/config.yml"
+        mode: '0644'
+        content: |
+          version: 0.1
+          log:
+            fields:
+              service: registry
+          storage:
+            filesystem:
+              rootdirectory: /var/lib/registry
+          http:
+            addr: :5000
+            headers:
+              X-Content-Type-Options: [nosniff]
+
+    - name: Seed shared backup script
+      copy:
+        dest: "{{ stacks_dir }}/backup-scripts/backup.sh"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env sh
+          set -eu
+          echo "Backup helper container initialized"
+          sleep infinity
+
+    - name: Seed database backup entrypoint
+      copy:
+        dest: "{{ stacks_dir }}/backup-scripts/backup-entrypoint.sh"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env sh
+          set -eu
+          echo "Database backup sidecar ready"
+          sleep infinity
+
+    - name: Seed MariaDB config
+      copy:
+        dest: "{{ stacks_dir }}/mariadb-config/galera.cnf"
+        mode: '0644'
+        content: |
+          [mysqld]
+          bind-address=0.0.0.0
+          default_storage_engine=InnoDB
+          innodb_autoinc_lock_mode=2
+          binlog_format=ROW
+
+    - name: Seed ProxySQL config
+      copy:
+        dest: "{{ stacks_dir }}/proxysql-config/proxysql.cnf"
+        mode: '0644'
+        content: |
+          datadir="/var/lib/proxysql"
+          admin_variables=
+          {
+            admin_credentials="admin:admin"
+            mysql_ifaces="0.0.0.0:6032"
+          }
+          mysql_variables=
+          {
+            threads=2
+            interfaces="0.0.0.0:6033"
+            default_query_delay=0
+            default_query_timeout=36000000
+            have_compress=true
+            poll_timeout=2000
+          }
+
+    - name: Seed Prometheus config
+      copy:
+        dest: "{{ stacks_dir }}/prometheus/prometheus.yml"
+        mode: '0644'
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: prometheus
+              static_configs:
+                - targets: ['localhost:9090']
+
+    - name: Seed Mimir config
+      copy:
+        dest: "{{ stacks_dir }}/mimir/mimir.yaml"
+        mode: '0644'
+        content: |
+          multitenancy_enabled: false
+          server:
+            http_listen_port: 8080
+          blocks_storage:
+            backend: filesystem
+            filesystem:
+              dir: /data/tsdb
+          compactor:
+            data_dir: /data/compactor
+          distributor:
+            ring:
+              kvstore:
+                store: memberlist
+          ingester:
+            ring:
+              kvstore:
+                store: memberlist
+              replication_factor: 1
+          memberlist:
+            join_members: ["mimir"]
+          ruler_storage:
+            backend: filesystem
+            filesystem:
+              dir: /data/rules
+          limits:
+            ingestion_rate: 20000
+            ingestion_burst_size: 40000
+
+    - name: Seed Loki config
+      copy:
+        dest: "{{ stacks_dir }}/loki/loki-config.yaml"
+        mode: '0644'
+        content: |
+          auth_enabled: false
+          server:
+            http_listen_port: 3100
+          common:
+            path_prefix: /loki
+            storage:
+              filesystem:
+                chunks_directory: /loki/chunks
+                rules_directory: /loki/rules
+            replication_factor: 1
+            ring:
+              kvstore:
+                store: inmemory
+          schema_config:
+            configs:
+              - from: 2020-10-24
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: index_
+                  period: 24h
+          limits_config:
+            allow_structured_metadata: false
+
+    - name: Seed Promtail config
+      copy:
+        dest: "{{ stacks_dir }}/promtail/promtail-config.yaml"
+        mode: '0644'
+        content: |
+          server:
+            http_listen_port: 9080
+          positions:
+            filename: /tmp/positions.yaml
+          clients:
+            - url: http://loki:3100/loki/api/v1/push
+          scrape_configs:
+            - job_name: system
+              static_configs:
+                - targets: [localhost]
+                  labels:
+                    job: varlogs
+                    __path__: /var/log/*.log
+
+    - name: Seed Tempo config
+      copy:
+        dest: "{{ stacks_dir }}/tempo/tempo-config.yaml"
+        mode: '0644'
+        content: |
+          server:
+            http_listen_port: 3200
+          distributor:
+            receivers:
+              otlp:
+                protocols:
+                  grpc:
+                  http:
+          ingester:
+            max_block_duration: 5m
+          compactor:
+            compaction:
+              block_retention: 24h
+          storage:
+            trace:
+              backend: local
+              local:
+                path: /tmp/tempo/traces
+              wal:
+                path: /tmp/tempo/wal
+
+    - name: Seed Grafana datasource provisioning
+      copy:
+        dest: "{{ stacks_dir }}/grafana/provisioning/datasources/datasources.yml"
+        mode: '0644'
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://prometheus:9090
+              isDefault: true
+
+    - name: Seed Grafana dashboard provisioning
+      copy:
+        dest: "{{ stacks_dir }}/grafana/provisioning/dashboards/dashboards.yml"
+        mode: '0644'
+        content: |
+          apiVersion: 1
+          providers:
+            - name: default
+              folder: General
+              type: file
+              options:
+                path: /var/lib/grafana/dashboards
+
+    - name: Seed placeholder Grafana dashboard
+      copy:
+        dest: "{{ stacks_dir }}/grafana/dashboards/placeholder.json"
+        mode: '0644'
+        content: |
+          {
+            "annotations": {"list": []},
+            "editable": true,
+            "panels": [],
+            "schemaVersion": 39,
+            "title": "Placeholder",
+            "version": 1
+          }
+
+    - name: Seed Alertmanager config
+      copy:
+        dest: "{{ stacks_dir }}/alertmanager/alertmanager.yml"
+        mode: '0644'
+        content: |
+          global:
+            resolve_timeout: 5m
+          route:
+            receiver: 'null'
+          receivers:
+            - name: 'null'
+
+    - name: Seed Blackbox config
+      copy:
+        dest: "{{ stacks_dir }}/blackbox/blackbox.yml"
+        mode: '0644'
+        content: |
+          modules:
+            http_2xx:
+              prober: http
+              timeout: 5s
+              http:
+                valid_status_codes: []
+
+    - name: Seed WordPress exporter sites config
+      copy:
+        dest: "{{ stacks_dir }}/wordpress-exporter/sites.json"
+        mode: '0644'
+        content: |
+          {"sites": []}
+
+    - name: Seed contractor nginx config
+      copy:
+        dest: "{{ config_dir }}/nginx/contractor-portal.conf"
+        mode: '0644'
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              root /usr/share/nginx/html;
+              index index.html;
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+
+    - name: Seed contractor SFTP users file
+      copy:
+        dest: "{{ config_dir }}/sftp/users/users.conf"
+        mode: '0640'
+        content: |
+          contractor:changeme:1001
+
+    - name: Seed local varnish file for traefik stack dependency
+      copy:
+        dest: "{{ stacks_dir }}/varnish/default.vcl"
+        mode: '0644'
+        content: |
+          vcl 4.1;
+          backend default {
+            .host = "127.0.0.1";
+            .port = "8080";
+          }
+          sub vcl_recv {
+            return (pass);
+          }
+
+    - name: Seed Varnish shared secret file
+      copy:
+        dest: "{{ config_dir }}/varnish/secret"
+        mode: '0640'
+        content: |
+          ciwg-varnish-secret
 
 
 - name: Deploy Traefik Stack
