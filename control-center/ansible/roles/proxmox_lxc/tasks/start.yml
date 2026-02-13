@@ -1,0 +1,37 @@
+---
+# roles/proxmox_lxc/tasks/start.yml
+# Start the container and wait until SSH is reachable through the jump host.
+
+- name: "Start | Ensure container {{ lxc_hostname }} is running"
+  community.general.proxmox:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: false
+    node: "{{ proxmox_node_name }}"
+    vmid: "{{ lxc_vmid }}"
+    state: started
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  when: lxc_start_after_create | bool
+
+- name: "Start | Wait for SSH on {{ lxc_hostname }} ({{ ansible_host }})"
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 22
+    delay: 5
+    timeout: "{{ lxc_ssh_wait_timeout }}"
+    state: started
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  when: lxc_start_after_create | bool
+
+- name: "Start | Verify SSH connectivity through jump host"
+  ansible.builtin.ping:
+  vars:
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o ProxyCommand="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p root@{{ proxmox_api_host }}"
+  delegate_to: localhost
+  become: false
+  when: lxc_start_after_create | bool
