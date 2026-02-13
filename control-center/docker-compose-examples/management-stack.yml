@@ -184,8 +184,8 @@ services:
       WATCHTOWER_INCLUDE_RESTARTING: "true"
       WATCHTOWER_POLL_INTERVAL: 86400  # 24 hours
       WATCHTOWER_ROLLING_RESTART: "true"
-      WATCHTOWER_NOTIFICATIONS: shoutrrr
-      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL}
+      WATCHTOWER_NOTIFICATIONS: ${WATCHTOWER_NOTIFICATIONS:-}
+      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-}
       WATCHTOWER_LABEL_ENABLE: "true"  # Only update containers with label
       WATCHTOWER_SCHEDULE: "0 0 2 * * *"  # 2 AM daily
     command: --interval 86400
@@ -259,7 +259,7 @@ services:
     networks:
       - management
     environment:
-      APPRISE_STATELESS_URLS: ${APPRISE_URLS}
+      APPRISE_STATELESS_URLS: ${APPRISE_URLS:-}
     deploy:
       mode: replicated
       replicas: 1
