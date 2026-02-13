@@ -220,7 +220,7 @@ For a single host, keep optional components disabled until the core path (ingres
 
 ### Key paths
 
-- `control-center/ansible/inventory/proxmox_lxc.yml`
+- `control-center/ansible/inventory/proxmox/proxmox_lxc.yml`
 - `control-center/ansible/deploy.yml`
 - `control-center/scripts/setup-proxmox.sh`
 - `control-center/docker-compose-examples/cache-stack.yml`
