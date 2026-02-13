@@ -77,7 +77,7 @@ ansible/
 ├── lxc_destroy.yml                      # Teardown playbook
 ├── inventory/
 │   ├── static.yml                       # Existing DO droplet inventory
-│   └── proxmox_lxc.yml                  # NEW — LXC container inventory
+│   └── proxmox/proxmox_lxc.yml          # NEW — LXC container inventory
 ├── group_vars/
 │   ├── all.yml                          # Global vars (existing)
 │   ├── proxmox_hosts.yml               # NEW — Proxmox host credentials
@@ -101,35 +101,35 @@ ansible/
 ### Provision All Containers
 
 ```bash
-ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml
+ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml
 ```
 
 ### Provision a Subset
 
 ```bash
 # Only database containers
-ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --limit lxc_database_nodes
+ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml --limit lxc_database_nodes
 
 # Only workers and cache
-ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --limit 'lxc_worker_nodes:lxc_cache_nodes'
+ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml --limit 'lxc_worker_nodes:lxc_cache_nodes'
 ```
 
 ### Dry Run
 
 ```bash
-ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --check
+ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml --check
 ```
 
 ### Re-run SSH Setup on Existing Containers
 
 ```bash
-ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml -e _lxc_force_ssh_setup=true
+ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml -e _lxc_force_ssh_setup=true
 ```
 
 ### Destroy Containers
 
 ```bash
-ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml
+ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_destroy.yml
 ```
 
 ## Connection Model — Jump Host / ProxyCommand
@@ -194,7 +194,7 @@ Then simply: `ssh root@10.10.10.10`
 
 ## Adding More Containers
 
-Edit `inventory/proxmox_lxc.yml` and add a new host entry under the appropriate group:
+Edit `inventory/proxmox/proxmox_lxc.yml` and add a new host entry under the appropriate group:
 
 ```yaml
 lxc_worker_nodes:
