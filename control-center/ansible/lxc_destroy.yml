@@ -7,13 +7,13 @@
 #
 # Usage:
 #   # Destroy all containers (requires confirmation)
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_destroy.yml
 #
 #   # Destroy only worker containers
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml --limit lxc_worker_nodes
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_destroy.yml --limit lxc_worker_nodes
 #
 #   # Skip confirmation prompt
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml -e confirm_destroy=yes
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_destroy.yml -e confirm_destroy=yes
 # =============================================================================
 
 - name: Destroy LXC Containers
