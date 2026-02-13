@@ -14,16 +14,16 @@
 #
 # Usage:
 #   # Provision all containers
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml
 #
 #   # Provision only database containers
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --limit lxc_database_nodes
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml --limit lxc_database_nodes
 #
 #   # Dry run
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --check
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml --check
 #
 #   # Re-run SSH setup on existing containers
-#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml -e lxc_force_ssh_setup=true
+#   ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml -e lxc_force_ssh_setup=true
 # =============================================================================
 
 # ---- Play 1: Prepare the Proxmox host ----
