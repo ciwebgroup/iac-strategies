@@ -1,0 +1,47 @@
+---
+# roles/proxmox_lxc/tasks/ssh.yml
+# Ensure SSH is configured inside the container so Ansible can manage it
+# later over the private network (via the Proxmox host as a jump host).
+#
+# Because the container may not be running yet (or SSH may not be up), we
+# use `pct exec` from the Proxmox host to bootstrap the SSH daemon.
+
+- name: "SSH | Start container if needed"
+  ansible.builtin.shell: |
+    if pct status {{ lxc_vmid }} | grep -qi stopped; then
+      pct start {{ lxc_vmid }}
+    fi
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  changed_when: false
+
+- name: "SSH | Ensure SSH server is installed and enabled inside container"
+  ansible.builtin.shell: |
+    pct exec {{ lxc_vmid }} -- bash -c '
+      # Install openssh-server if missing
+      if ! dpkg -l openssh-server 2>/dev/null | grep -q "^ii"; then
+        apt-get update -qq && apt-get install -y -qq openssh-server
+      fi
+
+      # Ensure sshd config allows root login with keys
+      sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+      sed -i "s/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config
+
+      # Ensure .ssh directory exists
+      mkdir -p /root/.ssh
+      chmod 700 /root/.ssh
+
+      # Write the authorized key (idempotent)
+      KEY="{{ _lxc_ssh_public_key }}"
+      AUTHKEYS="/root/.ssh/authorized_keys"
+      if [ ! -f "$AUTHKEYS" ] || ! grep -qF "$KEY" "$AUTHKEYS"; then
+        echo "$KEY" >> "$AUTHKEYS"
+      fi
+      chmod 600 "$AUTHKEYS"
+
+      # Enable and start sshd
+      systemctl enable ssh
+      systemctl restart ssh
+    '
+  delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+  when: _lxc_create_result is changed or _lxc_force_ssh_setup | default(false)
+  changed_when: true
