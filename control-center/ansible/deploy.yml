@@ -748,21 +748,27 @@
 
 
 - name: Configure Database Exporter Users
-  hosts: database_nodes
+  hosts: swarm_managers[0]
   tags: [database, users]
   tasks:
-    - name: Ensure MySQL exporter and WordPress exporter users exist
+    - name: Find node running galera-1
+      command: docker service ps database_galera-1 --format '{{ '{{' }}.Node{{ '}}' }}' | head -n1
+      register: galera_primary_node
+      changed_when: false
+
+    - name: Ensure MySQL exporter and WordPress exporter users exist on galera-1 node
+      delegate_to: "{{ galera_primary_node.stdout }}"
       shell: |
         set -e
         container_id=$(docker ps -qf name=database_galera-1 | head -n1)
         if [ -z "$container_id" ]; then
-          echo "Galera container not found on this node, skipping"
-          exit 0
+          echo "Galera container not found on this node" >&2
+          exit 1
         fi
         sql="CREATE USER IF NOT EXISTS 'exporter'@'%' IDENTIFIED BY '{{ mysql_exporter_password }}'; GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'exporter'@'%'; CREATE USER IF NOT EXISTS '{{ wp_exporter_user }}'@'%' IDENTIFIED BY '{{ wp_exporter_password }}'; GRANT SELECT ON *.* TO '{{ wp_exporter_user }}'@'%'; FLUSH PRIVILEGES;"
         docker exec "$container_id" sh -lc "mysql -uroot -p\"$(cat /run/secrets/mysql_root_password)\" -e \"$sql\""
       register: exporter_user_create
-      retries: 10
+      retries: 30
       delay: 10
       until: exporter_user_create.rc == 0
       no_log: true
