@@ -155,6 +155,41 @@ Higher spend, significantly better resilience and failure isolation.
 
 ---
 
+## Profile D mapping (current DO fleet)
+
+Based on your current production footprint:
+
+- **Provider:** DigitalOcean
+- **Server count:** 32
+- **Server class:** 8 vCPU / 16 GB RAM / ~320 GB NVMe
+- **Per-server cost:** $112/month
+- **Backups:** AWS S3, estimated 5–6 TB
+
+### Compute
+
+$$
+32 \times \$112 = \$3{,}584\ \text{per month}
+$$
+
+### S3 storage estimate (AWS S3 Standard, $0.023/GB‑month baseline)
+
+- 5 TB (≈ 5,120 GB): **$117.76/month**
+- 6 TB (≈ 6,144 GB): **$141.31/month**
+
+### Request/restore buffer
+
+Add **$25–$100/month** for request and restore overhead.
+
+### Estimated all‑in total
+
+$$
+\$3{,}584 + (\$118–\$141) + (\$25–\$100) \approx \$3{,}727–\$3{,}825\ \text{per month}
+$$
+
+**Interpretation:** Your current 32‑node DO fleet already maps to **Profile D**, with total monthly cost in the **$3.7k–$3.8k** range (compute + S3 estimate + buffer).
+
+---
+
 ## Existing repo reference points (historical)
 
 From project strategy docs, previous modeled architectures include larger multi-node production footprints with totals around:
@@ -245,5 +280,5 @@ Use this worksheet in planning meetings:
 ---
 
 **Document owner:** Platform Engineering  
-**Last updated:** 2026-02-12  
+**Last updated:** 2026-02-13  
 **Status:** Draft for management review
