@@ -38,7 +38,7 @@
     
     - name: Check for unhealthy nodes
       set_fact:
-        unhealthy_nodes: "{{ swarm_nodes.stdout_lines | select('search', '(?!Ready)') | list }}"
+        unhealthy_nodes: "{{ swarm_nodes.stdout_lines | reject('search', '\tReady\tActive$') | list }}"
     
     - name: Display Swarm health
       debug:
