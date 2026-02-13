@@ -44,7 +44,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ANSIBLE_DIR="$(cd "$SCRIPT_DIR/../ansible" && pwd)"
 INSTALL_PLAYBOOK="$ANSIBLE_DIR/install_proxmox.yml"
 LXC_PLAYBOOK="$ANSIBLE_DIR/lxc_provision.yml"
-LXC_INVENTORY="$ANSIBLE_DIR/inventory/proxmox_lxc.yml"
+LXC_INVENTORY="$ANSIBLE_DIR/inventory/proxmox/proxmox_lxc.yml"
 
 # Defaults (can be overridden by env vars or flags)
 DROPLET_NAME="${DROPLET_NAME:-$DEFAULT_DROPLET_NAME}"
@@ -275,7 +275,7 @@ fi
 
 echo "   ✅ Droplet IP: $IP_ADDRESS"
 
-# Export for the Ansible inventory (proxmox_lxc.yml reads this)
+# Export for the Ansible inventory (proxmox/proxmox_lxc.yml reads this)
 export PROXMOX_HOST_IP="$IP_ADDRESS"
 
 fi
@@ -387,5 +387,5 @@ echo "    export PROXMOX_API_TOKEN_SECRET=$PROXMOX_API_TOKEN_SECRET"
 echo ""
 echo "  To provision LXC containers later:"
 echo "    cd $ANSIBLE_DIR"
-echo "    ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml"
+echo "    ansible-playbook -i inventory/proxmox/proxmox_lxc.yml lxc_provision.yml"
 echo "═══════════════════════════════════════════════════════════"
