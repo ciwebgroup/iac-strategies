@@ -1,0 +1,8 @@
+---
+# roles/proxmox_lxc/vars/main.yml
+# Internal variables — not intended to be overridden
+
+# Network interface specification for the container
+# Format required by community.general.proxmox:
+#   '{"net0":"name=eth0,bridge=vmbr0,ip=10.10.10.10/24,gw=10.10.10.1"}'
+_lxc_net_config: "name=eth0,bridge={{ lxc_bridge }},ip={{ ansible_host }}/24,gw={{ lxc_gateway }}"
