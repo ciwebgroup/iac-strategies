@@ -1,0 +1,66 @@
+---
+# =============================================================================
+# LXC CONTAINER TEARDOWN PLAYBOOK
+# =============================================================================
+# Stops and destroys LXC containers defined in the inventory.
+# USE WITH CAUTION — this is destructive and irreversible.
+#
+# Usage:
+#   # Destroy all containers (requires confirmation)
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml
+#
+#   # Destroy only worker containers
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml --limit lxc_worker_nodes
+#
+#   # Skip confirmation prompt
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_destroy.yml -e confirm_destroy=yes
+# =============================================================================
+
+- name: Destroy LXC Containers
+  hosts: lxc_containers
+  gather_facts: false
+  serial: 1
+
+  tasks:
+    - name: "Confirm destruction of containers"
+      ansible.builtin.pause:
+        prompt: >-
+          You are about to DESTROY container {{ lxc_hostname }} (VMID {{ lxc_vmid }}).
+          Type 'yes' to continue
+      register: _confirm
+      when: confirm_destroy is not defined
+      run_once: true
+
+    - name: "Abort if not confirmed"
+      ansible.builtin.fail:
+        msg: "Aborted by user."
+      when:
+        - confirm_destroy is not defined
+        - _confirm.user_input | default('') != 'yes'
+      run_once: true
+
+    - name: "Stop container {{ lxc_hostname }} (VMID {{ lxc_vmid }})"
+      community.general.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: false
+        node: "{{ proxmox_node_name }}"
+        vmid: "{{ lxc_vmid }}"
+        state: stopped
+        force: true
+      delegate_to: "{{ groups['proxmox_hosts'][0] }}"
+      ignore_errors: true
+
+    - name: "Destroy container {{ lxc_hostname }} (VMID {{ lxc_vmid }})"
+      community.general.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: false
+        node: "{{ proxmox_node_name }}"
+        vmid: "{{ lxc_vmid }}"
+        state: absent
+      delegate_to: "{{ groups['proxmox_hosts'][0] }}"
