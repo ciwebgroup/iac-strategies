@@ -12,23 +12,17 @@ filters:
   - key: tags
     values:
       - wordpress-farm
-      - manager
-      - worker
-      - cache
-      - database
-      - storage
-      - monitor
 
 # Group droplets by tags
 groups:
-  swarm_managers: "'manager' in (do_tags | list)"
-  swarm_workers: "'worker' in (do_tags | list) or 'cache' in (do_tags | list) or 'database' in (do_tags | list) or 'storage' in (do_tags | list) or 'monitor' in (do_tags | list)"
-  cache_nodes: "'cache' in (do_tags | list)"
-  database_nodes: "'database' in (do_tags | list)"
-  storage_nodes: "'storage' in (do_tags | list)"
-  monitor_nodes: "'monitor' in (do_tags | list)"
-  worker_nodes: "'worker' in (do_tags | list) and 'cache' not in (do_tags | list) and 'database' not in (do_tags | list)"
-  all_nodes: "true"
+  swarm_managers: "do_name is match('^wp-manager-')"
+  swarm_workers: "do_name is match('^wp-(worker|cache|db|storage|monitor)-')"
+  cache_nodes: "do_name is match('^wp-cache-')"
+  database_nodes: "do_name is match('^wp-db-')"
+  storage_nodes: "do_name is match('^wp-storage-')"
+  monitor_nodes: "do_name is match('^wp-monitor-')"
+  worker_nodes: "do_name is match('^wp-worker-')"
+  all_nodes: "do_name is match('^wp-(manager|worker|cache|db|storage|monitor)-')"
 
 # Compose variables
 compose:
