@@ -1,0 +1,89 @@
+---
+# =============================================================================
+# LXC CONTAINER PROVISIONING PLAYBOOK
+# =============================================================================
+# Creates and configures LXC containers on a Proxmox VE host running on a
+# DigitalOcean Droplet (LXC only — no KVM due to nested virtualisation).
+#
+# Prerequisites:
+#   1. Proxmox host is reachable via SSH
+#   2. API token created:  pveum user token add root@pam ansible --privsep=0
+#   3. Environment variables set (see .env.example)
+#   4. Ansible collections installed:  ansible-galaxy collection install community.general
+#   5. Debian 12 LXC template available (auto-downloaded if missing)
+#
+# Usage:
+#   # Provision all containers
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml
+#
+#   # Provision only database containers
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --limit lxc_database_nodes
+#
+#   # Dry run
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml --check
+#
+#   # Re-run SSH setup on existing containers
+#   ansible-playbook -i inventory/proxmox_lxc.yml lxc_provision.yml -e lxc_force_ssh_setup=true
+# =============================================================================
+
+# ---- Play 1: Prepare the Proxmox host ----
+- name: Prepare Proxmox Host for LXC provisioning
+  hosts: proxmox_hosts
+  gather_facts: true
+  tags: [always, prepare]
+
+  tasks:
+    - name: Install Python dependencies for Proxmox API modules (Debian packages)
+      ansible.builtin.apt:
+        name:
+          - python3-proxmoxer
+          - python3-requests
+        state: present
+
+    - name: Verify Proxmox API connectivity
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/version"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+        validate_certs: false
+        status_code: 200
+      register: _pve_version
+      retries: 3
+      delay: 5
+
+    - name: Display Proxmox version
+      ansible.builtin.debug:
+        msg: "Proxmox VE {{ _pve_version.json.data.version }} ({{ _pve_version.json.data.release }})"
+
+
+# ---- Play 2: Create and start LXC containers ----
+- name: Provision LXC Containers
+  hosts: lxc_containers
+  gather_facts: false
+  serial: 3          # Create up to 3 containers in parallel
+  tags: [provision]
+
+  roles:
+    - role: proxmox_lxc
+
+
+# ---- Play 3: Verify all containers are reachable ----
+- name: Verify LXC Container Connectivity
+  hosts: lxc_containers
+  gather_facts: true
+  tags: [verify]
+
+  tasks:
+    - name: Gather facts from each container
+      ansible.builtin.setup:
+        gather_subset: [min]
+
+    - name: Display container summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} (VMID {{ lxc_vmid }})
+          — {{ ansible_host }}
+          — {{ ansible_distribution }} {{ ansible_distribution_version }}
+          — {{ ansible_memtotal_mb }}MB RAM
+          — {{ ansible_processor_vcpus }} vCPUs
