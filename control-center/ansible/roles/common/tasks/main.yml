@@ -56,7 +56,9 @@
     sysctl_set: true
     reload: true
   loop: "{{ sysctl_config | default({}) | dict2items }}"
-  when: sysctl_config is defined
+  when:
+    - sysctl_config is defined
+    - ansible_virtualization_type is not defined or ansible_virtualization_type != 'lxc'
 
 - name: Disable swap
   command: swapoff -a
