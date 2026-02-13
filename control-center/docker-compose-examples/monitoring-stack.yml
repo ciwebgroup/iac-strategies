@@ -30,11 +30,11 @@ services:
           - node.role == manager
       resources:
         limits:
-          cpus: '2'
-          memory: 4G
+          cpus: '0.8'
+          memory: 1024M
         reservations:
-          cpus: '1'
-          memory: 2G
+          cpus: '0.1'
+          memory: 256M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.prometheus.rule=Host(`prometheus.ciwebgroup.com`)"
@@ -61,17 +61,17 @@ services:
       - '-target=all'
     deploy:
       mode: replicated
-      replicas: 1
+      replicas: 0
       placement:
         constraints:
           - node.role == manager
       resources:
         limits:
-          cpus: '2'
-          memory: 4G
+          cpus: '0.6'
+          memory: 768M
         reservations:
-          cpus: '1'
-          memory: 2G
+          cpus: '0.05'
+          memory: 128M
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/ready"]
       interval: 10s
@@ -96,11 +96,11 @@ services:
           - node.role == manager
       resources:
         limits:
-          cpus: '2'
-          memory: 4G
+          cpus: '0.6'
+          memory: 768M
         reservations:
-          cpus: '1'
-          memory: 2G
+          cpus: '0.05'
+          memory: 128M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.loki.rule=Host(`loki.ciwebgroup.com`)"
@@ -129,11 +129,11 @@ services:
       mode: global
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '0.2'
+          memory: 192M
         reservations:
-          cpus: '0.1'
-          memory: 128M
+          cpus: '0.02'
+          memory: 48M
 
   # Tempo - Distributed Tracing
   tempo:
@@ -154,11 +154,11 @@ services:
           - node.role == manager
       resources:
         limits:
-          cpus: '2'
-          memory: 4G
+          cpus: '0.6'
+          memory: 768M
         reservations:
-          cpus: '1'
-          memory: 2G
+          cpus: '0.05'
+          memory: 128M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.tempo.rule=Host(`tempo.ciwebgroup.com`)"
@@ -206,11 +206,11 @@ services:
           - node.role == manager
       resources:
         limits:
-          cpus: '1'
-          memory: 2G
-        reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 512M
+        reservations:
+          cpus: '0.05'
+          memory: 128M
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.grafana.rule=Host(`grafana.ciwebgroup.com`)"
@@ -300,11 +300,11 @@ services:
       mode: global
       resources:
         limits:
-          cpus: '0.3'
-          memory: 256M
-        reservations:
           cpus: '0.1'
           memory: 128M
+        reservations:
+          cpus: '0.02'
+          memory: 32M
     privileged: true
     devices:
       - /dev/kmsg
@@ -321,7 +321,7 @@ services:
       - '--config.file=/etc/blackbox/blackbox.yml'
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 1
       placement:
         constraints:
           - node.role == worker
@@ -329,11 +329,11 @@ services:
           - spread: node.id
       resources:
         limits:
-          cpus: '0.2'
-          memory: 128M
-        reservations:
           cpus: '0.1'
-          memory: 64M
+          memory: 96M
+        reservations:
+          cpus: '0.02'
+          memory: 32M
 
   # Custom WordPress Exporter
   wordpress-exporter:
@@ -356,17 +356,17 @@ services:
       - ./wordpress-exporter/sites.json:/config/sites.json:ro
     deploy:
       mode: replicated
-      replicas: 1
+      replicas: 0
       placement:
         constraints:
           - node.role == worker
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
           cpus: '0.2'
           memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
 
   # Grafana Image Renderer (for PDF reports)
   grafana-image-renderer:
@@ -380,17 +380,17 @@ services:
       HTTP_PORT: 8081
     deploy:
       mode: replicated
-      replicas: 1
+      replicas: 0
       placement:
         constraints:
           - node.role == manager
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '0.2'
+          memory: 256M
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '0.05'
+          memory: 64M
 
 volumes:
   prometheus-data:
