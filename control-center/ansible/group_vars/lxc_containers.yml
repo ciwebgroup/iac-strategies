@@ -1,7 +1,7 @@
 ---
 # group_vars/lxc_containers.yml
 # Shared variables for ALL LXC containers on the Proxmox host.
-# Per-host overrides live in the inventory file (proxmox_lxc.yml).
+# Per-host overrides live in the inventory file (proxmox/proxmox_lxc.yml).
 
 # --- Connection ---
 ansible_user: root
