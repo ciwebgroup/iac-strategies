@@ -1,0 +1,20 @@
+---
+# roles/proxmox_lxc/meta/main.yml
+
+galaxy_info:
+  author: CIWebGroup
+  description: >
+    Create and provision LXC containers on a Proxmox VE host using the
+    community.general.proxmox module.  Designed for Proxmox running on
+    DigitalOcean Droplets (LXC only — no KVM).
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+
+collections:
+  - community.general
+
+dependencies: []
