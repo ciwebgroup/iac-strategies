@@ -752,7 +752,7 @@
   tags: [database, users]
   tasks:
     - name: Find node running galera-1
-      command: docker service ps database_galera-1 --format '{{ '{{' }}.Node{{ '}}' }}' | head -n1
+      shell: docker service ps database_galera-1 --format '{{ '{{' }}.Node{{ '}}' }}' | head -n1
       register: galera_primary_node
       changed_when: false
 
@@ -766,7 +766,7 @@
           exit 1
         fi
         sql="CREATE USER IF NOT EXISTS 'exporter'@'%' IDENTIFIED BY '{{ mysql_exporter_password }}'; GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'exporter'@'%'; CREATE USER IF NOT EXISTS '{{ wp_exporter_user }}'@'%' IDENTIFIED BY '{{ wp_exporter_password }}'; GRANT SELECT ON *.* TO '{{ wp_exporter_user }}'@'%'; FLUSH PRIVILEGES;"
-        docker exec "$container_id" sh -lc "mysql -uroot -p\"$(cat /run/secrets/mysql_root_password)\" -e \"$sql\""
+        docker exec "$container_id" sh -lc "MYSQL_PWD=\"\$(cat /run/secrets/mysql_root_password)\" mysql -uroot -e \"$sql\""
       register: exporter_user_create
       retries: 30
       delay: 10
@@ -778,13 +778,35 @@
   hosts: swarm_managers[0]
   tags: [database, users]
   tasks:
+    - name: List database services
+      command: docker service ls --format '{{ '{{' }}.Name{{ '}}' }}'
+      register: database_services
+      changed_when: false
+
     - name: Force restart of MySQL exporter services
-      command: docker service update --force database_mysql-exporter-{{ item }}
+      shell: docker service update --force --update-failure-action continue database_mysql-exporter-{{ item }}
       loop:
         - 1
         - 2
         - 3
+      when: "'database_mysql-exporter-' + (item | string) in database_services.stdout_lines"
+      register: mysql_exporter_updates
       changed_when: true
+      failed_when: false
+
+    - name: Wait for MySQL exporter tasks to be running
+      shell: >
+        docker service ps --filter desired-state=running --format '{{ '{{' }}.CurrentState{{ '}}' }}' database_mysql-exporter-{{ item }} | head -n1
+      loop:
+        - 1
+        - 2
+        - 3
+      when: "'database_mysql-exporter-' + (item | string) in database_services.stdout_lines"
+      register: mysql_exporter_status
+      retries: 30
+      delay: 5
+      until: mysql_exporter_status.stdout is search('Running|Ready')
+      changed_when: false
 
 
 - name: Deploy Monitoring Stack
