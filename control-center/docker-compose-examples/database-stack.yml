@@ -225,24 +225,29 @@ services:
     networks:
       - database
       - monitoring
-    environment:
-      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD}@(galera-1:3306)/"
-    command:
-      - '--collect.global_status'
-      - '--collect.info_schema.innodb_metrics'
-      - '--collect.auto_increment.columns'
-      - '--collect.info_schema.processlist'
-      - '--collect.binlog_size'
-      - '--collect.info_schema.tablestats'
-      - '--collect.global_variables'
-      - '--collect.info_schema.query_response_time'
-      - '--collect.info_schema.userstats'
-      - '--collect.info_schema.tables'
-      - '--collect.perf_schema.tablelocks'
-      - '--collect.perf_schema.file_events'
-      - '--collect.perf_schema.eventswaits'
-      - '--collect.perf_schema.indexiowaits'
-      - '--collect.perf_schema.tableiowaits'
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: >
+      set -eu;
+      password="$(cat /run/secrets/mysql_exporter_password)";
+      printf "[client]\nuser=exporter\npassword=%s\nhost=galera-1\nport=3306\n" "$password" > /tmp/.my.cnf;
+      exec /bin/mysqld_exporter --config.my-cnf=/tmp/.my.cnf
+      --collect.global_status
+      --collect.info_schema.innodb_metrics
+      --collect.auto_increment.columns
+      --collect.info_schema.processlist
+      --collect.binlog_size
+      --collect.info_schema.tablestats
+      --collect.global_variables
+      --collect.info_schema.query_response_time
+      --collect.info_schema.userstats
+      --collect.info_schema.tables
+      --collect.perf_schema.tablelocks
+      --collect.perf_schema.file_events
+      --collect.perf_schema.eventswaits
+      --collect.perf_schema.indexiowaits
+      --collect.perf_schema.tableiowaits
     deploy:
       mode: replicated
       replicas: 1
@@ -257,24 +262,29 @@ services:
     networks:
       - database
       - monitoring
-    environment:
-      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD}@(galera-2:3306)/"
-    command:
-      - '--collect.global_status'
-      - '--collect.info_schema.innodb_metrics'
-      - '--collect.auto_increment.columns'
-      - '--collect.info_schema.processlist'
-      - '--collect.binlog_size'
-      - '--collect.info_schema.tablestats'
-      - '--collect.global_variables'
-      - '--collect.info_schema.query_response_time'
-      - '--collect.info_schema.userstats'
-      - '--collect.info_schema.tables'
-      - '--collect.perf_schema.tablelocks'
-      - '--collect.perf_schema.file_events'
-      - '--collect.perf_schema.eventswaits'
-      - '--collect.perf_schema.indexiowaits'
-      - '--collect.perf_schema.tableiowaits'
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: >
+      set -eu;
+      password="$(cat /run/secrets/mysql_exporter_password)";
+      printf "[client]\nuser=exporter\npassword=%s\nhost=galera-2\nport=3306\n" "$password" > /tmp/.my.cnf;
+      exec /bin/mysqld_exporter --config.my-cnf=/tmp/.my.cnf
+      --collect.global_status
+      --collect.info_schema.innodb_metrics
+      --collect.auto_increment.columns
+      --collect.info_schema.processlist
+      --collect.binlog_size
+      --collect.info_schema.tablestats
+      --collect.global_variables
+      --collect.info_schema.query_response_time
+      --collect.info_schema.userstats
+      --collect.info_schema.tables
+      --collect.perf_schema.tablelocks
+      --collect.perf_schema.file_events
+      --collect.perf_schema.eventswaits
+      --collect.perf_schema.indexiowaits
+      --collect.perf_schema.tableiowaits
     deploy:
       mode: replicated
       replicas: 1
@@ -289,24 +299,29 @@ services:
     networks:
       - database
       - monitoring
-    environment:
-      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD}@(galera-3:3306)/"
-    command:
-      - '--collect.global_status'
-      - '--collect.info_schema.innodb_metrics'
-      - '--collect.auto_increment.columns'
-      - '--collect.info_schema.processlist'
-      - '--collect.binlog_size'
-      - '--collect.info_schema.tablestats'
-      - '--collect.global_variables'
-      - '--collect.info_schema.query_response_time'
-      - '--collect.info_schema.userstats'
-      - '--collect.info_schema.tables'
-      - '--collect.perf_schema.tablelocks'
-      - '--collect.perf_schema.file_events'
-      - '--collect.perf_schema.eventswaits'
-      - '--collect.perf_schema.indexiowaits'
-      - '--collect.perf_schema.tableiowaits'
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: >
+      set -eu;
+      password="$(cat /run/secrets/mysql_exporter_password)";
+      printf "[client]\nuser=exporter\npassword=%s\nhost=galera-3\nport=3306\n" "$password" > /tmp/.my.cnf;
+      exec /bin/mysqld_exporter --config.my-cnf=/tmp/.my.cnf
+      --collect.global_status
+      --collect.info_schema.innodb_metrics
+      --collect.auto_increment.columns
+      --collect.info_schema.processlist
+      --collect.binlog_size
+      --collect.info_schema.tablestats
+      --collect.global_variables
+      --collect.info_schema.query_response_time
+      --collect.info_schema.userstats
+      --collect.info_schema.tables
+      --collect.perf_schema.tablelocks
+      --collect.perf_schema.file_events
+      --collect.perf_schema.eventswaits
+      --collect.perf_schema.indexiowaits
+      --collect.perf_schema.tableiowaits
     deploy:
       mode: replicated
       replicas: 1
