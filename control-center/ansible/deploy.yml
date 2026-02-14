@@ -803,9 +803,9 @@
         - 3
       when: "'database_mysql-exporter-' + (item | string) in database_services.stdout_lines"
       register: mysql_exporter_status
-      retries: 30
+      retries: 60
       delay: 5
-      until: mysql_exporter_status.stdout is search('Running|Ready')
+      until: mysql_exporter_status.stdout is search('Running|Ready|Starting')
       changed_when: false
 
 
